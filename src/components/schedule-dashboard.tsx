@@ -28,6 +28,7 @@ const CLASS_SIZE_RANK: Record<string, number> = { "Lớp nhỏ": 1, "Lớp trung
 
 type ClassDomain = "coding" | "robotics" | "art" | "default";
 type BlockFilter = "coding" | "robotics" | "art";
+type SlotFilter = string;
 
 function getClassDomain(className: string): ClassDomain {
   const normalized = className.toUpperCase();
@@ -85,6 +86,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   const [teacherCode, setTeacherCode] = useState("");
   const [selectedCenter, setSelectedCenter] = useState("");
   const [selectedBlocks, setSelectedBlocks] = useState<BlockFilter[]>([]);
+  const [selectedSlots, setSelectedSlots] = useState<SlotFilter[]>([]);
   const [showRunningOnly, setShowRunningOnly] = useState(false);
   const [compactWeekView, setCompactWeekView] = useState(false);
   const [classSearch, setClassSearch] = useState("");
@@ -132,6 +134,10 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     setSelectedBlocks((prev) => (prev.includes(block) ? prev.filter((item) => item !== block) : [...prev, block]));
   };
 
+  const toggleSlotSelection = (slotLabel: string) => {
+    setSelectedSlots((prev) => (prev.includes(slotLabel) ? prev.filter((item) => item !== slotLabel) : [...prev, slotLabel]));
+  };
+
   const weekOptions = useMemo(() => {
     const uniqueByKey = new Map<string, string>();
     rowsByCenter.forEach((row) => {
@@ -171,6 +177,11 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     [rowsByCenter, slots, activeWeekKey],
   );
 
+  const visibleWeeklyMatrix = useMemo(() => {
+    if (selectedSlots.length === 0) return weeklyMatrix;
+    return weeklyMatrix.filter((line) => selectedSlots.includes(line.slot.label));
+  }, [weeklyMatrix, selectedSlots]);
+
   const personalWeekRows = useMemo(() => {
     if (!activeWeekKey) return personalSchedule;
     return personalSchedule.filter((row) => row.weekKey === activeWeekKey);
@@ -180,6 +191,11 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     () => buildWeeklyMatrix(personalWeekRows, slots, activeWeekKey),
     [personalWeekRows, slots, activeWeekKey],
   );
+
+  const visiblePersonalWeeklyMatrix = useMemo(() => {
+    if (selectedSlots.length === 0) return personalWeeklyMatrix;
+    return personalWeeklyMatrix.filter((line) => selectedSlots.includes(line.slot.label));
+  }, [personalWeeklyMatrix, selectedSlots]);
 
   const personalWeekLabel = useMemo(() => {
     const found = weekOptions.find((week) => week.key === activeWeekKey);
@@ -716,6 +732,24 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </div>
           </div>
 
+          {(activeModule === "weekly" || activeModule === "personal") && (
+            <div className="control-group">
+              <label>Khung giờ</label>
+              <div className="block-checklist">
+                {slots.map((slot) => (
+                  <label key={slot.label} className="block-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={selectedSlots.includes(slot.label)}
+                      onChange={() => toggleSlotSelection(slot.label)}
+                    />
+                    <span>{slot.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
           {activeModule === "personal" && (
             <div className="control-group">
               <label htmlFor="teacherInput">Mã / Tên giáo viên</label>
@@ -847,7 +881,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                     </tr>
                   </thead>
                   <tbody>
-                    {personalWeeklyMatrix.map((line) => (
+                    {visiblePersonalWeeklyMatrix.map((line) => (
                       <tr key={line.slot.label}>
                         <td>
                           <div className="slot-cell">
@@ -912,11 +946,6 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                 <p className="content-eyebrow">Module 2</p>
                 <h2 className="content-title">Lịch biểu giảng dạy theo tuần</h2>
               </div>
-              <div className="slot-legend">
-                <span>Sáng: 08:00 – 12:00</span>
-                <span>Chiều: 14:00 – 18:00</span>
-                <span>Tối: 18:00 – 21:00</span>
-              </div>
             </div>
 
             <div className="table-wrap">
@@ -931,7 +960,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                   </tr>
                 </thead>
                 <tbody>
-                  {weeklyMatrix.map((line) => (
+                  {visibleWeeklyMatrix.map((line) => (
                     <tr key={line.slot.label}>
                       <td>
                         <div className="slot-cell">
@@ -955,8 +984,9 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                         <div className="compact-info">
                                           <strong>{entry.className}</strong>
                                           <span className="compact-teacher">
-                                            {(entry.teacherNames.length > 0 ? entry.teacherNames : [entry.teacherName || "Chưa phân công"]).join(" | ")}
+                                            {entry.teacherName || "Chưa phân công"}
                                           </span>
+                                          {entry.taName && <span className="compact-ta">TA: {entry.taName}</span>}
                                         </div>
                                       </li>
                                     ))}
@@ -972,7 +1002,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                   <div className="center-group-cards">
                                     {group.rows.map((entry, entryIndex) => (
                                       <article
-                                        className={`calendar-card status-${entry.status.toLowerCase()} class-domain-${getClassDomain(entry.className || "")}`}
+                                        className={`calendar-card calendar-card--compact status-${entry.status.toLowerCase()} class-domain-${getClassDomain(entry.className || "")}`}
                                         key={`${entry.teacherCode}-${entry.className}-${entryIndex}`}
                                       >
                                         <div className="card-header-row">
@@ -984,14 +1014,8 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                           </span>
                                         </div>
                                         <p className="card-teacher">{entry.teacherName || "Chưa phân công"}</p>
-                                        {entry.teacherNames.length > 1 && (
-                                          <p className="card-teacher-list">Nhóm GV: {entry.teacherNames.join(", ")}</p>
-                                        )}
                                         {entry.taName && <p className="card-ta">TA: {entry.taName}</p>}
-                                        <p className="card-meta">
-                                          {entry.course}
-                                          {entry.centerName ? ` · ${entry.centerName}` : ""}
-                                        </p>
+                                        {entry.course && <p className="card-meta">{entry.course}</p>}
                                         {entry.isSpecialSlot && (
                                           <span className="special-slot-badge">{entry.slotLabel}</span>
                                         )}

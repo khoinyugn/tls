@@ -435,6 +435,29 @@ th {
   box-shadow: 0 2px 8px rgb(16 44 89 / 8%);
 }
 
+.calendar-card--compact {
+  padding: 0.36rem 0.45rem;
+}
+
+.calendar-card--compact h4 {
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.calendar-card--compact .card-teacher {
+  margin-top: 0.08rem;
+  font-size: 0.72rem;
+}
+
+.calendar-card--compact .card-ta {
+  margin-top: 0.06rem;
+  font-size: 0.72rem;
+}
+
+.calendar-card--compact .card-meta {
+  font-size: 0.72rem;
+}
+
 .calendar-card.class-domain-coding {
   border-left-color: #1f6fd2;
 }
@@ -466,11 +489,22 @@ th {
   font-weight: 600;
 }
 
-.card-ta,
+.card-ta {
+  margin: 0.12rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
 .card-meta,
-.compact-teacher,
 .compact-info span {
   color: #5a6472;
+}
+
+.compact-teacher,
+.compact-ta {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .card-role {
