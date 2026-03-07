@@ -1,56 +1,110 @@
-# Teacher Schedule Manager (Next.js + Google Sheet)
+# Teaching Leader System
 
-Ung dung quan ly thong tin lich giao vien tu Google Sheet voi 2 module:
+Hệ thống quản lý lịch giảng dạy dành cho đội ngũ vận hành/điều phối, xây dựng bằng **Next.js** và đọc dữ liệu trực tiếp từ **Google Sheet (CSV)**.
 
-- Module 1: Xem lich day ca nhan theo ma giao vien.
-- Module 2: Xem lich day theo tuan voi cac khung gio co ban va khung gio dac biet.
+## Mục tiêu hệ thống
 
-## 1. Cai dat
+- Theo dõi lịch dạy theo tuần theo từng khung giờ.
+- Quản lý danh sách lớp và trạng thái vận hành.
+- Tổng hợp báo cáo nhanh theo lớp, giáo viên, khung giờ.
+- Hỗ trợ bộ lọc linh hoạt theo cơ sở, khối, tuần, slot và trạng thái.
+
+## Tính năng chính
+
+- `Lịch theo tuần`: hiển thị timetable theo `T2 -> CN`, có nhóm theo cơ sở và hiển thị giáo viên/TA.
+- `Danh sách lớp`: xem thông tin lớp theo bảng, tìm kiếm nhanh theo tên lớp.
+- `Report phân tích`: thống kê tổng quan và phân tích tải dạy theo khung giờ/giáo viên.
+- `Bộ lọc đa chiều`: cơ sở, khối, khung giờ, tuần, trạng thái `RUNNING`.
+- `Đồng bộ dữ liệu`: nút làm mới dữ liệu từ nguồn Google Sheet.
+
+## Công nghệ sử dụng
+
+- `Next.js 16`
+- `React 19`
+- `TypeScript`
+- `PapaParse` (parse CSV)
+- `ESLint`
+
+## Cài đặt và chạy local
+
+1. Cài dependencies:
 
 ```bash
 npm install
+```
+
+2. Tạo file môi trường từ mẫu:
+
+```bash
 cp .env.example .env.local
 ```
 
-Cap nhat `.env.local` theo 1 trong 3 cach:
+3. Cấu hình nguồn Google Sheet trong `.env.local` theo một trong ba cách:
 
-- Cach 1: `GOOGLE_SHEET_CSV_URL` (link CSV direct sau khi Publish to web).
-- Cach 2: `GOOGLE_SHEET_ID` + `GOOGLE_SHEET_GID`.
-- Cach 3: `GOOGLE_SHEET_ID` + `GOOGLE_SHEET_NAME` (doc theo ten tab, vi du `f_data`).
+- Cách 1: dùng link CSV trực tiếp
+	- `GOOGLE_SHEET_CSV_URL`
+- Cách 2: dùng `sheet id` + `gid`
+	- `GOOGLE_SHEET_ID`
+	- `GOOGLE_SHEET_GID`
+- Cách 3: dùng `sheet id` + tên tab
+	- `GOOGLE_SHEET_ID`
+	- `GOOGLE_SHEET_NAME`
 
-Chay local:
+4. Chạy ứng dụng:
 
 ```bash
 npm run dev
 ```
 
-Mo `http://localhost:3000`.
+5. Truy cập:
 
-## 2. Dinh dang cot du lieu Google Sheet
+- `http://localhost:3000`
 
-Ung dung tu map ten cot, ban co the dung cot tieng Viet hoac tieng Anh.
-Nen co cac cot sau:
+## Scripts
 
-- `ma_giao_vien` hoac `teacher_code`
-- `ten_giao_vien` hoac `teacher_name`
-- `Date` hoac `thu` hoac `weekday` (gia tri thu trong tuan, vi du `Saturday`)
-- `Time` hoac `ca` hoac `slot` (vi du `14:00 - 16:00`)
-- `gio_bat_dau` / `gio_ket_thuc` (khong bat buoc neu da co `ca`)
-- `lop` hoac `class_name`
-- `phong` hoac `room`
-- `tuan` hoac `week` (de loc theo tuan)
-- `ghi_chu` hoac `note`
+- `npm run dev`: chạy môi trường phát triển.
+- `npm run build`: build production.
+- `npm run start`: chạy production server sau khi build.
+- `npm run lint`: kiểm tra chuẩn code.
 
-Luu y quan trong:
+## Yêu cầu dữ liệu đầu vào (Google Sheet)
 
-- Moi dong du lieu duoc xem la 1 lop.
-- `Ngay bat dau` va `Ngay ket thuc` duoc dung de tao lich theo tung tuan thuc te.
-- `Date` duoc hieu la thu trong tuan cua lop, he thong se sinh ra cac ngay hoc cu the trong khoang thoi gian lop chay.
+Hệ thống có cơ chế map cột linh hoạt (tên cột tiếng Việt hoặc tiếng Anh). Nên đảm bảo có các nhóm thông tin sau:
 
-## 3. Khung gio mac dinh Module 2
+- Thông tin lớp: tên lớp, trạng thái, cơ sở, khóa học.
+- Thời gian học: thứ trong tuần, khung giờ hoặc giờ bắt đầu/kết thúc.
+- Thời hạn lớp: ngày bắt đầu, ngày kết thúc.
+- Nhân sự: giáo viên chính, mã giáo viên, trợ giảng (nếu có).
 
-- Sang: `08:00 - 10:00`, `10:00 - 12:00`
-- Chieu: `14:00 - 16:00`, `16:00 - 18:00`
-- Toi: `18:00 - 20:00`, `19:00 - 21:00`
+Lưu ý:
 
-Moi khung gio khac co trong Sheet se duoc hien thi tu dong la khung gio dac biet.
+- Mỗi dòng dữ liệu được xem là một lớp/buổi theo lịch nguồn.
+- Hệ thống sẽ chuẩn hóa thứ trong tuần và mở rộng hiển thị theo từng tuần thực tế.
+- Các slot ngoài khung chuẩn vẫn được nhận diện và hiển thị.
+
+## Cấu trúc thư mục chính
+
+```text
+src/
+	app/
+		layout.tsx              # Metadata, font và layout gốc
+		page.tsx                # Entry server component
+		globals.css             # Toàn bộ style hệ thống
+	components/
+		schedule-dashboard.tsx  # Dashboard chính (sidebar + modules)
+	lib/
+		google-sheet.ts         # Parse CSV, chuẩn hóa dữ liệu lịch
+	types/
+		schedule.ts             # Kiểu dữ liệu lịch dạy
+```
+
+## Triển khai (Deploy)
+
+- Có thể deploy lên Vercel hoặc nền tảng tương đương chạy Next.js.
+- Bắt buộc cấu hình biến môi trường ở môi trường deploy tương tự `.env.local`.
+- Nếu thiếu biến môi trường, ứng dụng sẽ không tải được dữ liệu lịch.
+
+## Thông tin sản phẩm
+
+- Tên hệ thống: `Teaching Leader System`
+- Đơn vị vận hành: `HCM1&4`
