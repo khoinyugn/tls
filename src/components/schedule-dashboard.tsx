@@ -328,6 +328,9 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     const colIndex = Array.from(headerRow.children).indexOf(th);
     if (colIndex < 0) return;
 
+    // Keep weekly time-slot column compact and non-resizable.
+    if (tableKey === "weekly" && colIndex === 0) return;
+
     const currentWidth = tableColumnWidths[tableKey]?.[colIndex] ?? bounds.width;
     resizeSessionRef.current = {
       tableKey,
@@ -615,6 +618,8 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           </div>
         </div>
 
+        <div className="sidebar-scroll">
+
         <div className="sync-bar">
           <div className="sync-info">
             <span className={`sync-dot${isRefreshing ? " sync-dot--spinning" : ""}`} />
@@ -836,6 +841,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
         </div>
 
         <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>
+        </div>
       </aside>
 
       {/* ── CONTENT AREA ── */}
