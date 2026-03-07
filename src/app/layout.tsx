@@ -21,7 +21,7 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Quan Ly Lich Giao Vien",
+  title: "Teaching Leader System",
   description: "He thong Next.js doc Google Sheet de quan ly thong tin va lich giang day giao vien",
 };
 

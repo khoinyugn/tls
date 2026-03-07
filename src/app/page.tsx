@@ -32,9 +32,11 @@ export default async function Home() {
           </div>
           <div className="brand-text">
             <p className="brand-eyebrow">MindX Education</p>
-            <h1 className="brand-title">Teacher Scheduler</h1>
+            <h1 className="brand-title">Teaching Leader System</h1>
+            <p className="brand-subtitle">HCM1&4</p>
           </div>
         </div>
+        <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>
       </aside>
       <main className="content-area">
         <section className="content-section">

@@ -95,10 +95,27 @@ body {
   color: var(--primary);
 }
 
-.sidebar-nav {
+.brand-subtitle {
+  margin: 0.22rem 0 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #5f7ea4;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: #748ba5;
+  text-align: center;
+}
+
+.sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 0.28rem;
+  gap: 0.72rem;
   padding: 0.7rem;
   border: 1px solid #d7e3f4;
   border-left: 3px solid var(--primary);
@@ -106,9 +123,14 @@ body {
   background: #f9fbff;
 }
 
+.sidebar-nav {
+  gap: 0.28rem;
+}
+
 .nav-section-label {
   margin: 0 0 0.4rem;
   font-size: 0.66rem;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: #6f8cab;
@@ -149,14 +171,25 @@ body {
 }
 
 .sidebar-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 0.72rem;
-  padding: 0.7rem;
-  border: 1px solid #d7e3f4;
-  border-left: 3px solid var(--primary);
+}
+
+.sidebar-search {
   border-radius: 12px;
-  background: #f9fbff;
+  background: linear-gradient(180deg, #f6faff 0%, #f9fbff 100%);
+}
+
+.sidebar-search .nav-section-label {
+  margin-bottom: 0.1rem;
+  color: #6f8cab;
+}
+
+.control-group--search > label:not(.toggle-label) {
+  color: #6f8cab;
+}
+
+.sidebar-search .search-input {
+  border-color: var(--border);
+  background: #ffffff;
 }
 
 .control-group {
@@ -173,7 +206,8 @@ body {
 }
 
 .sidebar-controls input,
-.sidebar-controls select {
+.sidebar-controls select,
+.sidebar-search input {
   background: #fff;
   border: 1px solid var(--border);
   color: var(--foreground);
@@ -204,12 +238,19 @@ body {
   margin: 0;
 }
 
-.sidebar-controls input::placeholder {
+.sidebar-controls input::placeholder,
+.sidebar-search input::placeholder {
   color: #92a9bf;
 }
 
 .sidebar-controls input:focus,
-.sidebar-controls select:focus {
+.sidebar-controls select:focus,
+.sidebar-search input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(6 65 200 / 12%);
+}
+
+.sidebar-search .search-input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgb(6 65 200 / 12%);
 }
@@ -220,10 +261,11 @@ body {
   grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
   padding: 0.75rem;
-  border: 1px solid #d7e3f4;
-  border-left: 3px solid var(--primary);
-  border-radius: 12px;
-  background: #f9fbff;
+}
+
+.sidebar-stats--top {
+  margin-top: 0;
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .stat-card {

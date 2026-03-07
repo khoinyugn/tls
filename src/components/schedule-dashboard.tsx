@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TeacherScheduleRow, WEEKDAYS, WeeklySlot } from "@/types/schedule";
 import { buildWeeklyMatrix } from "@/lib/google-sheet";
 
-type ActiveModule = "personal" | "weekly" | "classes" | "report";
+type ActiveModule = "weekly" | "classes" | "report";
 
 type ScheduleDashboardProps = {
   rows: TeacherScheduleRow[];
@@ -83,8 +83,8 @@ function getCurrentWeekKey(): string {
 
 export default function ScheduleDashboard({ rows: initialRows, slots: initialSlots }: ScheduleDashboardProps) {
   const [activeModule, setActiveModule] = useState<ActiveModule>("weekly");
-  const [teacherCode, setTeacherCode] = useState("");
-  const [selectedCenter, setSelectedCenter] = useState("");
+  const [weeklyTeacherSearch, setWeeklyTeacherSearch] = useState("");
+  const [selectedCenters, setSelectedCenters] = useState<string[]>([]);
   const [selectedBlocks, setSelectedBlocks] = useState<BlockFilter[]>([]);
   const [selectedSlots, setSelectedSlots] = useState<SlotFilter[]>([]);
   const [showRunningOnly, setShowRunningOnly] = useState(false);
@@ -121,17 +121,43 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     );
   }, [rows]);
 
-  const rowsByCenter = useMemo(() => {
-    let filtered = selectedCenter ? rows.filter((row) => row.centerName === selectedCenter) : rows;
+  const filteredRows = useMemo(() => {
+    let filtered = selectedCenters.length > 0
+      ? rows.filter((row) => selectedCenters.includes(row.centerName || ""))
+      : rows;
+
     if (selectedBlocks.length > 0) {
       filtered = filtered.filter((row) => selectedBlocks.includes(getClassDomain(row.className || "") as BlockFilter));
     }
     if (showRunningOnly) filtered = filtered.filter((row) => row.status === "RUNNING");
     return filtered;
-  }, [rows, selectedCenter, selectedBlocks, showRunningOnly]);
+  }, [rows, selectedCenters, selectedBlocks, showRunningOnly]);
+
+  const weeklyRows = useMemo(() => {
+    const keyword = weeklyTeacherSearch.trim().toLowerCase();
+    if (!keyword) return filteredRows;
+
+    return filteredRows.filter((row) => {
+      const teacherPool = [
+        row.teacherName,
+        row.teacherCode,
+        ...row.teacherNames,
+        row.taName,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return teacherPool.includes(keyword);
+    });
+  }, [filteredRows, weeklyTeacherSearch]);
 
   const toggleBlockSelection = (block: BlockFilter) => {
     setSelectedBlocks((prev) => (prev.includes(block) ? prev.filter((item) => item !== block) : [...prev, block]));
+  };
+
+  const toggleCenterSelection = (center: string) => {
+    setSelectedCenters((prev) => (prev.includes(center) ? prev.filter((item) => item !== center) : [...prev, center]));
   };
 
   const toggleSlotSelection = (slotLabel: string) => {
@@ -140,13 +166,13 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
 
   const weekOptions = useMemo(() => {
     const uniqueByKey = new Map<string, string>();
-    rowsByCenter.forEach((row) => {
+    filteredRows.forEach((row) => {
       if (row.weekKey && row.weekLabel) uniqueByKey.set(row.weekKey, row.weekLabel);
     });
     return Array.from(uniqueByKey.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, label]) => ({ key, label }));
-  }, [rowsByCenter]);
+  }, [filteredRows]);
 
   const [selectedWeekKey, setSelectedWeekKey] = useState(getCurrentWeekKey);
 
@@ -158,23 +184,9 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     return weekOptions[weekOptions.length - 1]?.key ?? "";
   }, [weekOptions, selectedWeekKey]);
 
-  const personalSchedule = useMemo(() => {
-    const keyword = teacherCode.trim().toLowerCase();
-    if (!keyword) return [];
-    return rowsByCenter
-      .filter(
-        (row) =>
-          row.teacherCode.toLowerCase().includes(keyword) || row.teacherName.toLowerCase().includes(keyword),
-      )
-      .sort((a, b) => {
-        const byDate = a.sessionDateKey.localeCompare(b.sessionDateKey);
-        return byDate !== 0 ? byDate : a.startTime.localeCompare(b.startTime);
-      });
-  }, [rowsByCenter, teacherCode]);
-
   const weeklyMatrix = useMemo(
-    () => buildWeeklyMatrix(rowsByCenter, slots, activeWeekKey),
-    [rowsByCenter, slots, activeWeekKey],
+    () => buildWeeklyMatrix(weeklyRows, slots, activeWeekKey),
+    [weeklyRows, slots, activeWeekKey],
   );
 
   const visibleWeeklyMatrix = useMemo(() => {
@@ -182,32 +194,22 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     return weeklyMatrix.filter((line) => selectedSlots.includes(line.slot.label));
   }, [weeklyMatrix, selectedSlots]);
 
-  const personalWeekRows = useMemo(() => {
-    if (!activeWeekKey) return personalSchedule;
-    return personalSchedule.filter((row) => row.weekKey === activeWeekKey);
-  }, [personalSchedule, activeWeekKey]);
+  const sidebarKpiRows = useMemo(() => {
+    if (selectedSlots.length === 0) return filteredRows;
+    return filteredRows.filter((row) => selectedSlots.includes(row.fixedSlotLabel));
+  }, [filteredRows, selectedSlots]);
 
-  const personalWeeklyMatrix = useMemo(
-    () => buildWeeklyMatrix(personalWeekRows, slots, activeWeekKey),
-    [personalWeekRows, slots, activeWeekKey],
-  );
+  const sidebarKpis = useMemo(() => {
+    const classCount = new Set(sidebarKpiRows.map((row) => row.className).filter(Boolean)).size;
+    const teacherCount = new Set(
+      sidebarKpiRows
+        .map((row) => row.teacherCode || row.teacherName)
+        .filter(Boolean),
+    ).size;
+    const buCount = new Set(sidebarKpiRows.map((row) => row.centerName).filter(Boolean)).size;
 
-  const visiblePersonalWeeklyMatrix = useMemo(() => {
-    if (selectedSlots.length === 0) return personalWeeklyMatrix;
-    return personalWeeklyMatrix.filter((line) => selectedSlots.includes(line.slot.label));
-  }, [personalWeeklyMatrix, selectedSlots]);
-
-  const personalWeekLabel = useMemo(() => {
-    const found = weekOptions.find((week) => week.key === activeWeekKey);
-    return found?.label ?? "Tuần hiện tại";
-  }, [weekOptions, activeWeekKey]);
-
-  const stats = useMemo(() => {
-    const runningClasses = new Set(rows.filter((r) => r.status === "RUNNING").map((r) => r.className));
-    const teachers = new Set(rows.map((r) => r.teacherCode).filter(Boolean));
-    const centers = new Set(rows.map((r) => r.centerName).filter(Boolean));
-    return { runningCount: runningClasses.size, teacherCount: teachers.size, centerCount: centers.size };
-  }, [rows]);
+    return { classCount, teacherCount, buCount };
+  }, [sidebarKpiRows]);
 
   type ClassSummaryRow = {
     className: string;
@@ -225,7 +227,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
 
   const classSummary = useMemo(() => {
     const map = new Map<string, ClassSummaryRow>();
-    rowsByCenter.forEach((row) => {
+    filteredRows.forEach((row) => {
       if (!map.has(row.className)) {
         map.set(row.className, {
           className: row.className,
@@ -248,7 +250,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     return Array.from(map.values())
       .filter((c) => !keyword || c.className.toLowerCase().includes(keyword))
       .sort((a, b) => a.className.localeCompare(b.className));
-  }, [rowsByCenter, classSearch]);
+  }, [filteredRows, classSearch]);
 
   type TimeSlotSummaryRow = {
     slotLabel: string;
@@ -414,7 +416,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   }, [weekOptions, activeWeekKey]);
 
   const reportData = useMemo(() => {
-    const reportRows = activeWeekKey ? rowsByCenter.filter((row) => row.weekKey === activeWeekKey) : rowsByCenter;
+    const reportRows = activeWeekKey ? filteredRows.filter((row) => row.weekKey === activeWeekKey) : filteredRows;
     const totalClasses = new Set(reportRows.map((row) => row.className).filter(Boolean)).size;
 
     const timeSlotRows: TimeSlotSummaryRow[] = slots.map((slot) => {
@@ -547,7 +549,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
       timeSlotRows,
       teacherRows,
     };
-  }, [rowsByCenter, slots, activeWeekKey]);
+  }, [filteredRows, slots, activeWeekKey]);
 
   const sortedTimeSlotRows = useMemo(() => {
     const rows = [...reportData.timeSlotRows];
@@ -608,7 +610,8 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           </div>
           <div className="brand-text">
             <p className="brand-eyebrow">MindX Education</p>
-            <h1 className="brand-title">Teacher Scheduler</h1>
+            <h1 className="brand-title">Teaching Leader System</h1>
+            <p className="brand-subtitle">HCM1&4</p>
           </div>
         </div>
 
@@ -640,18 +643,23 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           {refreshError && <p className="sync-error">{refreshError}</p>}
         </div>
 
-        <nav className="sidebar-nav">
+        <div className="sidebar-stats sidebar-stats--top sidebar-section">
+          <div className="stat-card">
+            <span className="stat-value">{sidebarKpis.classCount}</span>
+            <span className="stat-label">Lớp</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-value">{sidebarKpis.teacherCount}</span>
+            <span className="stat-label">Giáo viên</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-value">{sidebarKpis.buCount}</span>
+            <span className="stat-label">BU</span>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav sidebar-section">
           <p className="nav-section-label">Modules</p>
-          <button
-            className={`nav-item${activeModule === "personal" ? " nav-item--active" : ""}`}
-            onClick={() => setActiveModule("personal")}
-          >
-            <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="2" />
-              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <span>Lịch cá nhân</span>
-          </button>
           <button
             className={`nav-item${activeModule === "weekly" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("weekly")}
@@ -687,19 +695,39 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           </button>
         </nav>
 
-        <div className="sidebar-controls">
+        {activeModule === "weekly" && (
+          <div className="sidebar-search sidebar-section">
+            <p className="nav-section-label">Tìm kiếm</p>
+            <div className="control-group control-group--search">
+              <label htmlFor="teacherSearchInput">Tìm giáo viên</label>
+              <input
+                className="search-input"
+                id="teacherSearchInput"
+                value={weeklyTeacherSearch}
+                onChange={(e) => setWeeklyTeacherSearch(e.target.value)}
+                placeholder="Tên hoặc mã giáo viên"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="sidebar-controls sidebar-section">
           <p className="nav-section-label">Bộ lọc</p>
 
           <div className="control-group">
-            <label htmlFor="centerSelect">Cơ sở</label>
-            <select id="centerSelect" value={selectedCenter} onChange={(e) => setSelectedCenter(e.target.value)}>
-              <option value="">Tất cả cơ sở</option>
+            <label>Cơ sở</label>
+            <div className="block-checklist">
               {centerOptions.map((center) => (
-                <option key={center} value={center}>
-                  {center}
-                </option>
+                <label key={center} className="block-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={selectedCenters.includes(center)}
+                    onChange={() => toggleCenterSelection(center)}
+                  />
+                  <span>{center}</span>
+                </label>
               ))}
-            </select>
+            </div>
           </div>
 
           <div className="control-group">
@@ -732,7 +760,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </div>
           </div>
 
-          {(activeModule === "weekly" || activeModule === "personal") && (
+          {(activeModule === "weekly" || activeModule === "report") && (
             <div className="control-group">
               <label>Khung giờ</label>
               <div className="block-checklist">
@@ -750,19 +778,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </div>
           )}
 
-          {activeModule === "personal" && (
-            <div className="control-group">
-              <label htmlFor="teacherInput">Mã / Tên giáo viên</label>
-              <input
-                id="teacherInput"
-                value={teacherCode}
-                onChange={(e) => setTeacherCode(e.target.value)}
-                placeholder="Ví dụ: GV001"
-              />
-            </div>
-          )}
-
-          {(activeModule === "weekly" || activeModule === "report" || activeModule === "personal") && (
+          {(activeModule === "weekly" || activeModule === "report") && (
             <>
               <div className="control-group">
                 <label htmlFor="weekSelect">Tuần</label>
@@ -819,131 +835,16 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           )}
         </div>
 
-        <div className="sidebar-stats">
-          <div className="stat-card">
-            <span className="stat-value">{stats.runningCount}</span>
-            <span className="stat-label">Lớp đang chạy</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{stats.teacherCount}</span>
-            <span className="stat-label">Giáo viên</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{stats.centerCount}</span>
-            <span className="stat-label">Cơ sở</span>
-          </div>
-        </div>
+        <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>
       </aside>
 
       {/* ── CONTENT AREA ── */}
       <main className="content-area">
-        {activeModule === "personal" && (
-          <section className="content-section">
-            <div className="content-header">
-              <div>
-                <p className="content-eyebrow">Module 1</p>
-                <h2 className="content-title">Lịch biểu giảng dạy cá nhân</h2>
-                <p className="report-note">Phạm vi tuần: {personalWeekLabel}</p>
-              </div>
-              <div className="header-actions">
-                {teacherCode.trim() && personalWeekRows.length > 0 && (
-                  <span className="result-badge">{personalWeekRows.length} buổi</span>
-                )}
-              </div>
-            </div>
-
-            {!teacherCode.trim() ? (
-              <div className="empty-state">
-                <svg viewBox="0 0 24 24" fill="none" className="empty-icon">
-                  <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="2" />
-                  <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <p>Nhập mã hoặc tên giáo viên ở thanh bên trái để xem lịch.</p>
-              </div>
-            ) : personalSchedule.length === 0 ? (
-              <div className="empty-state">
-                <p>Không tìm thấy lịch dạy phù hợp.</p>
-              </div>
-            ) : personalWeekRows.length === 0 ? (
-              <div className="empty-state">
-                <p>Giáo viên này không có lịch trong tuần đang chọn.</p>
-              </div>
-            ) : (
-              <div className="table-wrap">
-                <table className="week-table resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "personal-week")}> 
-                  {renderTableColGroup("personal-week", WEEKDAYS.length + 1)}
-                  <thead>
-                    <tr>
-                      <th className="slot-col">Khung giờ</th>
-                      {WEEKDAYS.map((day) => (
-                        <th key={day}>{`${day} (${getWeekdayDateLabel(activeWeekKey, day)})`}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visiblePersonalWeeklyMatrix.map((line) => (
-                      <tr key={line.slot.label}>
-                        <td>
-                          <div className="slot-cell">
-                            <strong>{line.slot.label}</strong>
-                            <small>{line.slot.period}</small>
-                          </div>
-                        </td>
-                        {line.byDay.map((entries, index) => (
-                          <td key={`${line.slot.label}-${WEEKDAYS[index]}`}>
-                            {entries.length === 0 ? (
-                              <span className="muted">–</span>
-                            ) : (
-                              <div className="calendar-cell">
-                                {groupEntriesByCenter(entries).map((group) => (
-                                  <section key={group.centerName} className="center-group">
-                                    <p className="center-group-title">{group.centerName}</p>
-                                    <div className="center-group-cards">
-                                      {group.rows.map((entry, entryIndex) => (
-                                        <article
-                                          className={`calendar-card status-${entry.status.toLowerCase()} class-domain-${getClassDomain(entry.className || "")}`}
-                                          key={`${entry.teacherCode}-${entry.className}-${entryIndex}`}
-                                        >
-                                          <div className="card-header-row">
-                                            <h4>{entry.className}</h4>
-                                            <span className={`status-badge status-badge--${entry.status.toLowerCase()}`}>
-                                              {entry.status}
-                                            </span>
-                                          </div>
-                                          <p className="card-teacher">Giáo viên: {entry.teacherName || "Chưa phân công"}</p>
-                                          <p className="card-role">Role: Lecturer</p>
-                                          <p className="card-meta">
-                                            {entry.centerName || "Chưa có cơ sở"}
-                                            {entry.course ? ` · ${entry.course}` : ""}
-                                          </p>
-                                          <p className="card-meta">Ngày học: {entry.sessionDate || "–"}</p>
-                                          {entry.taName && <p className="card-ta">TA: {entry.taName}</p>}
-                                          {entry.isSpecialSlot && (
-                                            <span className="special-slot-badge">{entry.slotLabel}</span>
-                                          )}
-                                        </article>
-                                      ))}
-                                    </div>
-                                  </section>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-
         {activeModule === "weekly" && (
           <section className="content-section">
             <div className="content-header">
               <div>
-                <p className="content-eyebrow">Module 2</p>
+                <p className="content-eyebrow">Module 1</p>
                 <h2 className="content-title">Lịch biểu giảng dạy theo tuần</h2>
               </div>
             </div>
@@ -1015,7 +916,6 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                         </div>
                                         <p className="card-teacher">{entry.teacherName || "Chưa phân công"}</p>
                                         {entry.taName && <p className="card-ta">TA: {entry.taName}</p>}
-                                        {entry.course && <p className="card-meta">{entry.course}</p>}
                                         {entry.isSpecialSlot && (
                                           <span className="special-slot-badge">{entry.slotLabel}</span>
                                         )}
@@ -1040,7 +940,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           <section className="content-section">
             <div className="content-header">
               <div>
-                <p className="content-eyebrow">Module 3</p>
+                <p className="content-eyebrow">Module 2</p>
                 <h2 className="content-title">Danh sách lớp học</h2>
               </div>
               {classSummary.length > 0 && (
@@ -1104,7 +1004,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           <section className="content-section">
             <div className="content-header">
               <div>
-                <p className="content-eyebrow">Module 4</p>
+                <p className="content-eyebrow">Module 3</p>
                 <h2 className="content-title">Report thống kê và phân tích</h2>
                 <p className="report-note">Phạm vi tuần: {reportWeekLabel} | Quy đổi: 1 lớp = 2 giờ/tuần</p>
               </div>
