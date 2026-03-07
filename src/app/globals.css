@@ -185,6 +185,25 @@ body {
   width: 100%;
 }
 
+.block-checklist {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.block-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: #4f6f90;
+}
+
+.block-checkbox input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
 .sidebar-controls input::placeholder {
   color: #92a9bf;
 }

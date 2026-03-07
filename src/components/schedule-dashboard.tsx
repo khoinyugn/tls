@@ -27,6 +27,7 @@ const WORKLOAD_RANK: Record<string, number> = { Nhẹ: 1, Vừa: 2, Nặng: 3 };
 const CLASS_SIZE_RANK: Record<string, number> = { "Lớp nhỏ": 1, "Lớp trung bình": 2, "Lớp đông": 3 };
 
 type ClassDomain = "coding" | "robotics" | "art" | "default";
+type BlockFilter = "coding" | "robotics" | "art";
 
 function getClassDomain(className: string): ClassDomain {
   const normalized = className.toUpperCase();
@@ -83,6 +84,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   const [activeModule, setActiveModule] = useState<ActiveModule>("weekly");
   const [teacherCode, setTeacherCode] = useState("");
   const [selectedCenter, setSelectedCenter] = useState("");
+  const [selectedBlocks, setSelectedBlocks] = useState<BlockFilter[]>([]);
   const [showRunningOnly, setShowRunningOnly] = useState(false);
   const [compactWeekView, setCompactWeekView] = useState(false);
   const [classSearch, setClassSearch] = useState("");
@@ -119,9 +121,16 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
 
   const rowsByCenter = useMemo(() => {
     let filtered = selectedCenter ? rows.filter((row) => row.centerName === selectedCenter) : rows;
+    if (selectedBlocks.length > 0) {
+      filtered = filtered.filter((row) => selectedBlocks.includes(getClassDomain(row.className || "") as BlockFilter));
+    }
     if (showRunningOnly) filtered = filtered.filter((row) => row.status === "RUNNING");
     return filtered;
-  }, [rows, selectedCenter, showRunningOnly]);
+  }, [rows, selectedCenter, selectedBlocks, showRunningOnly]);
+
+  const toggleBlockSelection = (block: BlockFilter) => {
+    setSelectedBlocks((prev) => (prev.includes(block) ? prev.filter((item) => item !== block) : [...prev, block]));
+  };
 
   const weekOptions = useMemo(() => {
     const uniqueByKey = new Map<string, string>();
@@ -675,6 +684,36 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="control-group">
+            <label>Khối</label>
+            <div className="block-checklist">
+              <label className="block-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selectedBlocks.includes("coding")}
+                  onChange={() => toggleBlockSelection("coding")}
+                />
+                <span>Coding (C4K, JS, CS, PT)</span>
+              </label>
+              <label className="block-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selectedBlocks.includes("robotics")}
+                  onChange={() => toggleBlockSelection("robotics")}
+                />
+                <span>Robotics (ROB)</span>
+              </label>
+              <label className="block-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selectedBlocks.includes("art")}
+                  onChange={() => toggleBlockSelection("art")}
+                />
+                <span>Art (XART)</span>
+              </label>
+            </div>
           </div>
 
           {activeModule === "personal" && (
