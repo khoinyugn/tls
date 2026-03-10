@@ -387,7 +387,7 @@ body {
 .table-wrap {
   overflow: auto;
   /* Keep table area inside viewport while maximizing visible rows. */
-  max-height: clamp(360px, calc(100dvh - 320px), 980px);
+  max-height: clamp(360px, calc(100dvh - 160px), 980px);
   border-radius: 12px;
   border: 1px solid var(--border);
   box-shadow: 0 6px 18px rgb(16 44 89 / 6%);
@@ -418,6 +418,7 @@ th {
   position: relative;
   color: #fff;
   font-weight: 600;
+  text-align: center;
 }
 
 /* Keep table headers visible inside table scroll area. */
@@ -480,7 +481,7 @@ thead th {
   top: 52px;
   z-index: 13;
   background: #fff;
-  padding-top: 0.9rem;
+  padding-top: calc(0.9rem + 6px);
 }
 
 .muted {

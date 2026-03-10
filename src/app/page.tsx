@@ -1,6 +1,8 @@
 import ScheduleDashboard from "@/components/schedule-dashboard";
 import { buildWeeklySlots, getTeacherSchedules } from "@/lib/google-sheet";
 
+export const dynamic = "force-dynamic";
+
 async function loadScheduleData() {
   try {
     const rows = await getTeacherSchedules();

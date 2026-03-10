@@ -46,6 +46,7 @@ const WEEKDAY_INDEX: Record<WeekdayLabel, number> = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const VN_OFFSET_MS = 7 * 60 * 60 * 1000; // UTC+7
 
 function normalizeText(value: unknown): string {
   return String(value ?? "").trim();
@@ -95,6 +96,39 @@ function normalizeWeekday(rawValue: string): WeekdayLabel {
     .trim();
 
   return WEEKDAY_BY_TOKEN[lower] ?? "T2";
+}
+
+// Parses an ISO UTC datetime string and returns the VN-local (UTC+7) hour and minute.
+function parseIsoToVnTime(rawValue: string): { hour: number; minute: number } | null {
+  const trimmed = rawValue.trim();
+  if (!trimmed || !trimmed.includes("T")) return null;
+  const utcDate = new Date(trimmed);
+  if (Number.isNaN(utcDate.getTime())) return null;
+  const vnDate = new Date(utcDate.getTime() + VN_OFFSET_MS);
+  return { hour: vnDate.getUTCHours(), minute: vnDate.getUTCMinutes() };
+}
+
+// Derives weekday label (T2–CN) from an ISO UTC datetime using VN timezone (UTC+7).
+function deriveWeekdayFromIso(rawValue: string): WeekdayLabel | null {
+  const trimmed = rawValue.trim();
+  if (!trimmed || !trimmed.includes("T")) return null;
+  const utcDate = new Date(trimmed);
+  if (Number.isNaN(utcDate.getTime())) return null;
+  const vnDate = new Date(utcDate.getTime() + VN_OFFSET_MS);
+  const DAY_LABELS: WeekdayLabel[] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+  return DAY_LABELS[vnDate.getUTCDay()];
+}
+
+// Derives slot label (e.g., "08:00 - 10:00") from two ISO UTC datetime strings using VN timezone.
+function deriveSlotFromIso(startRaw: string, endRaw: string): string {
+  const startTime = parseIsoToVnTime(startRaw);
+  const endTime = parseIsoToVnTime(endRaw);
+  if (!startTime || !endTime) return "";
+  const sH = String(startTime.hour).padStart(2, "0");
+  const sM = String(startTime.minute).padStart(2, "0");
+  const eH = String(endTime.hour).padStart(2, "0");
+  const eM = String(endTime.minute).padStart(2, "0");
+  return `${sH}:${sM} - ${eH}:${eM}`;
 }
 
 function parseDateValue(rawValue: string): Date | null {
@@ -313,8 +347,9 @@ function getGoogleSheetCsvUrl(): string {
   }
 
   if (sheetName) {
-    // gviz endpoint supports selecting a worksheet by visible tab name.
-    return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+    // export endpoint returns ALL rows regardless of active filters on the sheet.
+    // gviz/tq was previously used here but it respects sheet filter views, causing rows to be hidden.
+    return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&sheet=${encodeURIComponent(sheetName)}`;
   }
 
   return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
@@ -323,7 +358,7 @@ function getGoogleSheetCsvUrl(): string {
 export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
   const csvUrl = getGoogleSheetCsvUrl();
   const response = await fetch(csvUrl, {
-    next: { revalidate: 300 },
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -337,15 +372,14 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
 
   for (const row of rawRows) {
     const className = pickValue(row, ["class", "lop", "class_name"]);
-    const centerName = pickValue(row, ["centre name", "centre_name", "co so", "campus", "branch"]);
+    // "centre" is the actual column name; keep legacy aliases for backward compatibility.
+    const centerName = pickValue(row, ["centre", "centre name", "centre_name", "co so", "campus", "branch"]);
     const weekdayRaw = pickValue(row, ["date", "thu", "weekday", "day", "ngay trong tuan"]);
-    // "Time" holds the display slot; "Ngay bat dau" / "Ngay ket thuc" hold dd/MM/yyyy dates.
     const slotValue = pickValue(row, ["time", "ca", "slot", "time_slot"]);
-    // Prefer dd/MM/yyyy cols (Ngay bat dau) over ISO cols (Date Start) to avoid UTC-offset issues.
     const startDateRaw = pickValueOrdered(row, ["ngay bat dau", "ngay_bat_dau", "date start", "start_date"]);
     const endDateRaw = pickValueOrdered(row, ["ngay ket thuc", "ngay_ket_thuc", "date end", "end_date"]);
-    // LEC = clean primary lecturer; keep Mentor for complete teacher list.
-    const lecRaw = pickValueOrdered(row, ["lec", "teacher", "mentor"]);
+    // "teachers" is the actual column name; keep legacy aliases for backward compatibility.
+    const lecRaw = pickValueOrdered(row, ["lec", "teachers", "teacher", "mentor"]);
     const mentorRaw = pickValue(row, ["mentor"]);
     const taRaw = pickValue(row, ["ta"]);
     const course = pickValue(row, ["course-f", "course"]);
@@ -358,8 +392,13 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
       "student_number",
     ]);
 
-    const weekday = normalizeWeekday(weekdayRaw);
-    const slotLabel = resolveSlotLabel(slotValue, "", "");
+    // Derive weekday from start_date ISO datetime (UTC+7) when no dedicated weekday column exists.
+    const derivedWeekday = deriveWeekdayFromIso(startDateRaw);
+    const weekday: WeekdayLabel = weekdayRaw ? normalizeWeekday(weekdayRaw) : (derivedWeekday ?? "T2");
+    // Derive slot from start_date/end_date ISO datetimes (UTC+7) when no dedicated slot column exists.
+    const derivedSlot = deriveSlotFromIso(startDateRaw, endDateRaw);
+    const effectiveSlot = slotValue || derivedSlot;
+    const slotLabel = resolveSlotLabel(effectiveSlot, "", "");
     const fixedSlotLabel = resolveFixedSlotLabel(slotLabel);
     const termStartDate = parseDateValue(startDateRaw);
     const termEndDate = parseDateValue(endDateRaw);

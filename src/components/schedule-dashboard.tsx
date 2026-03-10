@@ -87,9 +87,12 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   const [selectedCenters, setSelectedCenters] = useState<string[]>([]);
   const [selectedBlocks, setSelectedBlocks] = useState<BlockFilter[]>([]);
   const [selectedSlots, setSelectedSlots] = useState<SlotFilter[]>([]);
-  const [showRunningOnly, setShowRunningOnly] = useState(false);
+  const [showRunningOnly, setShowRunningOnly] = useState(true);
   const [compactWeekView, setCompactWeekView] = useState(false);
   const [classSearch, setClassSearch] = useState("");
+  const [classTeacherSearch, setClassTeacherSearch] = useState("");
+  const [classDateFrom, setClassDateFrom] = useState("");
+  const [classDateTo, setClassDateTo] = useState("");
 
   // Live data state
   const [rows, setRows] = useState<TeacherScheduleRow[]>(initialRows);
@@ -102,7 +105,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     setIsRefreshing(true);
     setRefreshError("");
     try {
-      const res = await fetch("/api/schedule");
+      const res = await fetch("/api/schedule", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { rows: TeacherScheduleRow[]; slots: WeeklySlot[] };
       setRows(data.rows);
@@ -214,6 +217,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   type ClassSummaryRow = {
     className: string;
     teacherName: string;
+    teacherCode: string;
     taName: string;
     centerName: string;
     weekday: string;
@@ -223,6 +227,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     termStartDate: string;
     termEndDate: string;
     sessionCount: number;
+    sessionDateKeys: string[];
   };
 
   const classSummary = useMemo(() => {
@@ -232,6 +237,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
         map.set(row.className, {
           className: row.className,
           teacherName: row.teacherName,
+          teacherCode: row.teacherCode,
           taName: row.taName,
           centerName: row.centerName,
           weekday: row.weekday,
@@ -241,16 +247,29 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           termStartDate: row.termStartDate,
           termEndDate: row.termEndDate,
           sessionCount: 1,
+          sessionDateKeys: [row.sessionDateKey],
         });
       } else {
-        map.get(row.className)!.sessionCount++;
+        const entry = map.get(row.className)!;
+        entry.sessionCount++;
+        entry.sessionDateKeys.push(row.sessionDateKey);
       }
     });
     const keyword = classSearch.trim().toLowerCase();
+    const teacherKeyword = classTeacherSearch.trim().toLowerCase();
     return Array.from(map.values())
       .filter((c) => !keyword || c.className.toLowerCase().includes(keyword))
+      .filter((c) => !teacherKeyword || [c.teacherName, c.teacherCode, c.taName].join(" ").toLowerCase().includes(teacherKeyword))
+      .filter((c) => {
+        if (!classDateFrom && !classDateTo) return true;
+        return c.sessionDateKeys.some((d) => {
+          if (classDateFrom && d < classDateFrom) return false;
+          if (classDateTo && d > classDateTo) return false;
+          return true;
+        });
+      })
       .sort((a, b) => a.className.localeCompare(b.className));
-  }, [filteredRows, classSearch]);
+  }, [filteredRows, classSearch, classTeacherSearch, classDateFrom, classDateTo]);
 
   type TimeSlotSummaryRow = {
     slotLabel: string;
@@ -716,6 +735,57 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           </div>
         )}
 
+        {activeModule === "classes" && (
+          <div className="sidebar-search sidebar-section">
+            <p className="nav-section-label">Tìm kiếm</p>
+            <div className="control-group control-group--search">
+              <label htmlFor="classInput">Tìm lớp</label>
+              <input
+                className="search-input"
+                id="classInput"
+                value={classSearch}
+                onChange={(e) => setClassSearch(e.target.value)}
+                placeholder="Tên lớp..."
+              />
+            </div>
+            <div className="control-group control-group--search">
+              <label htmlFor="classTeacherInput">Tìm giáo viên</label>
+              <input
+                className="search-input"
+                id="classTeacherInput"
+                value={classTeacherSearch}
+                onChange={(e) => setClassTeacherSearch(e.target.value)}
+                placeholder="Tên GV / TA..."
+              />
+            </div>
+            <div className="control-group">
+              <label>Khoảng ngày diễn ra</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <input
+                  type="date"
+                  value={classDateFrom}
+                  onChange={(e) => setClassDateFrom(e.target.value)}
+                  title="Từ ngày"
+                />
+                <input
+                  type="date"
+                  value={classDateTo}
+                  onChange={(e) => setClassDateTo(e.target.value)}
+                  title="Đến ngày"
+                />
+              </div>
+              {(classDateFrom || classDateTo) && (
+                <button
+                  style={{ marginTop: "4px", fontSize: "11px", cursor: "pointer" }}
+                  onClick={() => { setClassDateFrom(""); setClassDateTo(""); }}
+                >
+                  Xóa bộ lọc ngày
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="sidebar-controls sidebar-section">
           <p className="nav-section-label">Bộ lọc</p>
 
@@ -827,17 +897,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </>
           )}
 
-          {activeModule === "classes" && (
-            <div className="control-group">
-              <label htmlFor="classInput">Tìm lớp</label>
-              <input
-                id="classInput"
-                value={classSearch}
-                onChange={(e) => setClassSearch(e.target.value)}
-                placeholder="Tên lớp..."
-              />
-            </div>
-          )}
+
         </div>
 
         <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>
@@ -947,11 +1007,13 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             <div className="content-header">
               <div>
                 <p className="content-eyebrow">Module 2</p>
-                <h2 className="content-title">Danh sách lớp học</h2>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <h2 className="content-title">Danh sách lớp học</h2>
+                  {classSummary.length > 0 && (
+                    <span className="result-badge">{classSummary.length} lớp</span>
+                  )}
+                </div>
               </div>
-              {classSummary.length > 0 && (
-                <span className="result-badge">{classSummary.length} lớp</span>
-              )}
             </div>
 
             {classSummary.length === 0 ? (
