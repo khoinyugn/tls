@@ -197,6 +197,68 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     return weeklyMatrix.filter((line) => selectedSlots.includes(line.slot.label));
   }, [weeklyMatrix, selectedSlots]);
 
+  // For each (domain, fixedSlotLabel, weekday): list of teachers who have NO class in that slot+day (within the active week).
+  const freeTeachersBySlot = useMemo(() => {
+    // Collect all teachers and their domains from the active-week rows.
+    const weekRows = activeWeekKey ? filteredRows.filter((r) => r.weekKey === activeWeekKey) : filteredRows;
+
+    // Build a set of all (teacherCode|teacherName) per domain.
+    const allTeachersByDomain = new Map<ClassDomain, Map<string, string>>(); // domain → Map<key, displayName>
+
+    // Build a set of busy teacher keys per (domain|slot|day).
+    const busySet = new Map<string, Set<string>>(); // "domain|slot|day" → Set<teacherKey>
+
+    for (const row of weekRows) {
+      const domain = getClassDomain(row.className || "");
+      if (domain === "default") continue;
+
+      const teacherKey = row.teacherCode || row.teacherName;
+      if (!teacherKey) continue;
+      const displayName = row.teacherName || row.teacherCode;
+
+      if (!allTeachersByDomain.has(domain)) allTeachersByDomain.set(domain, new Map());
+      allTeachersByDomain.get(domain)!.set(teacherKey, displayName);
+
+      const slotDayKey = `${domain}|${row.fixedSlotLabel}|${row.weekday}`;
+      if (!busySet.has(slotDayKey)) busySet.set(slotDayKey, new Set());
+      busySet.get(slotDayKey)!.add(teacherKey);
+    }
+
+    // Result: "domain|slot|day" → sorted list of free teacher display names.
+    const result = new Map<string, string[]>();
+    allTeachersByDomain.forEach((teacherMap, domain) => {
+      WEEKDAYS.forEach((day) => {
+        const slotDayKey = `${domain}|`;
+        teacherMap.forEach((displayName, teacherKey) => {
+          // Check across all slot labels for this domain.
+        });
+      });
+    });
+
+    // Simpler direct build.
+    allTeachersByDomain.forEach((teacherMap, domain) => {
+      WEEKDAYS.forEach((day) => {
+        // Get all unique fixedSlotLabels for this domain.
+        const slotLabels = new Set<string>();
+        weekRows.forEach((r) => {
+          if (getClassDomain(r.className || "") === domain) slotLabels.add(r.fixedSlotLabel);
+        });
+        slotLabels.forEach((slot) => {
+          const key = `${domain}|${slot}|${day}`;
+          const busy = busySet.get(key) ?? new Set<string>();
+          const free: string[] = [];
+          teacherMap.forEach((displayName, teacherKey) => {
+            if (!busy.has(teacherKey)) free.push(displayName);
+          });
+          free.sort((a, b) => a.localeCompare(b));
+          if (free.length > 0) result.set(key, free);
+        });
+      });
+    });
+
+    return result;
+  }, [filteredRows, activeWeekKey]);
+
   const sidebarKpiRows = useMemo(() => {
     if (selectedSlots.length === 0) return filteredRows;
     return filteredRows.filter((row) => selectedSlots.includes(row.fixedSlotLabel));
@@ -945,7 +1007,11 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                 <section key={group.centerName} className="center-group">
                                   <p className="center-group-title">{group.centerName}</p>
                                   <ul className="compact-list">
-                                    {group.rows.map((entry, entryIndex) => (
+                                    {group.rows.map((entry, entryIndex) => {
+                                      const domain = getClassDomain(entry.className || "");
+                                      const freeKey = `${domain}|${entry.fixedSlotLabel}|${entry.weekday}`;
+                                      const freeTeachers = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
+                                      return (
                                       <li key={`${entry.className}-${entryIndex}`} className="compact-item">
                                         <span className={`compact-dot status-dot--${entry.status.toLowerCase()}`} />
                                         <div className="compact-info">
@@ -954,9 +1020,19 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                             {entry.teacherName || "Chưa phân công"}
                                           </span>
                                           {entry.taName && <span className="compact-ta">TA: {entry.taName}</span>}
+                                          {freeTeachers.length > 0 && (
+                                            <span className="free-teacher-tooltip">
+                                              <span className="free-teacher-icon">&#128100;</span>
+                                              <span className="free-teacher-popover">
+                                                <strong>GV rảnh cùng khối ({domain}):</strong>
+                                                <ul>{freeTeachers.map((name) => <li key={name}>{name}</li>)}</ul>
+                                              </span>
+                                            </span>
+                                          )}
                                         </div>
                                       </li>
-                                    ))}
+                                      );
+                                    })}
                                   </ul>
                                 </section>
                               ))}
@@ -967,7 +1043,11 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                 <section key={group.centerName} className="center-group">
                                   <p className="center-group-title">{group.centerName}</p>
                                   <div className="center-group-cards">
-                                    {group.rows.map((entry, entryIndex) => (
+                                    {group.rows.map((entry, entryIndex) => {
+                                      const domain = getClassDomain(entry.className || "");
+                                      const freeKey = `${domain}|${entry.fixedSlotLabel}|${entry.weekday}`;
+                                      const freeTeachers = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
+                                      return (
                                       <article
                                         className={`calendar-card calendar-card--compact status-${entry.status.toLowerCase()} class-domain-${getClassDomain(entry.className || "")}`}
                                         key={`${entry.teacherCode}-${entry.className}-${entryIndex}`}
@@ -985,8 +1065,18 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                         {entry.isSpecialSlot && (
                                           <span className="special-slot-badge">{entry.slotLabel}</span>
                                         )}
+                                        {freeTeachers.length > 0 && (
+                                          <span className="free-teacher-tooltip">
+                                            <span className="free-teacher-icon">&#128100; GV rảnh</span>
+                                            <span className="free-teacher-popover">
+                                              <strong>GV rảnh cùng khối ({domain}):</strong>
+                                              <ul>{freeTeachers.map((name) => <li key={name}>{name}</li>)}</ul>
+                                            </span>
+                                          </span>
+                                        )}
                                       </article>
-                                    ))}
+                                      );
+                                    })}
                                   </div>
                                 </section>
                               ))}

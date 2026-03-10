@@ -959,3 +959,59 @@ thead th {
     padding: 1rem 0.85rem 2rem;
   }
 }
+
+/* ── Free teacher hover tooltip ─────────────────────────────── */
+.free-teacher-tooltip {
+  position: relative;
+  display: inline-block;
+  cursor: default;
+}
+
+.free-teacher-icon {
+  font-size: 11px;
+  color: var(--color-primary, #4f46e5);
+  opacity: 0.75;
+  user-select: none;
+}
+
+.free-teacher-popover {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 200;
+  min-width: 180px;
+  max-width: 260px;
+  background: #1e1e2e;
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.free-teacher-popover strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+.free-teacher-popover ul {
+  margin: 0;
+  padding: 0 0 0 14px;
+}
+
+.free-teacher-popover li {
+  margin: 2px 0;
+}
+
+.free-teacher-tooltip:hover .free-teacher-popover {
+  display: block;
+}
