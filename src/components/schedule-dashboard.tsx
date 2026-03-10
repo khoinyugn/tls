@@ -965,7 +965,6 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           <section className="content-section">
             <div className="content-header">
               <div>
-                <p className="content-eyebrow">Module 1</p>
                 <h2 className="content-title">Lịch biểu giảng dạy theo tuần</h2>
               </div>
             </div>
@@ -1137,7 +1136,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           <section className="content-section">
             <div className="content-header">
               <div>
-                <p className="content-eyebrow">Module 2</p>
+                
                 <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                   <h2 className="content-title">Danh sách lớp học</h2>
                   {classSummary.length > 0 && (
@@ -1203,7 +1202,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           <section className="content-section">
             <div className="content-header">
               <div>
-                <p className="content-eyebrow">Module 3</p>
+                
                 <h2 className="content-title">Report thống kê và phân tích</h2>
                 <p className="report-note">Phạm vi tuần: {reportWeekLabel} | Quy đổi: 1 lớp = 2 giờ/tuần</p>
               </div>

@@ -406,7 +406,7 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const mentorEntries = extractTeacherEntries(mentorRaw);
     const taEntries = extractTeacherEntries(taRaw);
     const teacherEntries = mergeTeacherEntries(lecEntries, mentorEntries, taEntries);
-    const teacherInfo = lecEntries[0] ?? mentorEntries[0] ?? { teacherName: "", teacherCode: "" };
+    const teacherInfo = lecEntries.at(-1) ?? mentorEntries.at(-1) ?? { teacherName: "", teacherCode: "" };
     const taInfo = taEntries[0] ?? { teacherName: "", teacherCode: "" };
     const slotTime = splitSlot(slotLabel);
     const studentCount = parseStudentCount(studentCountRaw);
