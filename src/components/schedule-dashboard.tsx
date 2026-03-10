@@ -93,6 +93,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   const [classTeacherSearch, setClassTeacherSearch] = useState("");
   const [classDateFrom, setClassDateFrom] = useState("");
   const [classDateTo, setClassDateTo] = useState("");
+  const [freeModal, setFreeModal] = useState<{ freeKey: string; domain: string; slot: string; day: string; centre: string } | null>(null);
 
   // Live data state
   const [rows, setRows] = useState<TeacherScheduleRow[]>(initialRows);
@@ -197,21 +198,19 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     return weeklyMatrix.filter((line) => selectedSlots.includes(line.slot.label));
   }, [weeklyMatrix, selectedSlots]);
 
-  // For each (domain, fixedSlotLabel, weekday): list of teachers who have NO class in that slot+day (within the active week).
+  type FreeTeacherEntry = { name: string; teacherKey: string; daysActive: Set<string>; centresActive: Set<string> };
+
+  // For each (domain, fixedSlotLabel, weekday): list of teachers who have NO class in that slot+day.
   const freeTeachersBySlot = useMemo(() => {
-    // Collect all teachers and their domains from the active-week rows.
     const weekRows = activeWeekKey ? filteredRows.filter((r) => r.weekKey === activeWeekKey) : filteredRows;
 
-    // Build a set of all (teacherCode|teacherName) per domain.
     const allTeachersByDomain = new Map<ClassDomain, Map<string, string>>(); // domain → Map<key, displayName>
-
-    // Build a set of busy teacher keys per (domain|slot|day).
     const busySet = new Map<string, Set<string>>(); // "domain|slot|day" → Set<teacherKey>
+    const teacherActivity = new Map<string, { daysActive: Set<string>; centresActive: Set<string> }>();
 
     for (const row of weekRows) {
       const domain = getClassDomain(row.className || "");
       if (domain === "default") continue;
-
       const teacherKey = row.teacherCode || row.teacherName;
       if (!teacherKey) continue;
       const displayName = row.teacherName || row.teacherCode;
@@ -222,35 +221,29 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
       const slotDayKey = `${domain}|${row.fixedSlotLabel}|${row.weekday}`;
       if (!busySet.has(slotDayKey)) busySet.set(slotDayKey, new Set());
       busySet.get(slotDayKey)!.add(teacherKey);
+
+      if (!teacherActivity.has(teacherKey)) teacherActivity.set(teacherKey, { daysActive: new Set(), centresActive: new Set() });
+      const act = teacherActivity.get(teacherKey)!;
+      act.daysActive.add(row.weekday);
+      if (row.centerName) act.centresActive.add(row.centerName);
     }
 
-    // Result: "domain|slot|day" → sorted list of free teacher display names.
-    const result = new Map<string, string[]>();
+    const result = new Map<string, FreeTeacherEntry[]>();
     allTeachersByDomain.forEach((teacherMap, domain) => {
+      const slotLabels = new Set<string>();
+      weekRows.forEach((r) => { if (getClassDomain(r.className || "") === domain) slotLabels.add(r.fixedSlotLabel); });
       WEEKDAYS.forEach((day) => {
-        const slotDayKey = `${domain}|`;
-        teacherMap.forEach((displayName, teacherKey) => {
-          // Check across all slot labels for this domain.
-        });
-      });
-    });
-
-    // Simpler direct build.
-    allTeachersByDomain.forEach((teacherMap, domain) => {
-      WEEKDAYS.forEach((day) => {
-        // Get all unique fixedSlotLabels for this domain.
-        const slotLabels = new Set<string>();
-        weekRows.forEach((r) => {
-          if (getClassDomain(r.className || "") === domain) slotLabels.add(r.fixedSlotLabel);
-        });
         slotLabels.forEach((slot) => {
           const key = `${domain}|${slot}|${day}`;
           const busy = busySet.get(key) ?? new Set<string>();
-          const free: string[] = [];
+          const free: FreeTeacherEntry[] = [];
           teacherMap.forEach((displayName, teacherKey) => {
-            if (!busy.has(teacherKey)) free.push(displayName);
+            if (!busy.has(teacherKey)) {
+              const act = teacherActivity.get(teacherKey);
+              free.push({ name: displayName, teacherKey, daysActive: act?.daysActive ?? new Set(), centresActive: act?.centresActive ?? new Set() });
+            }
           });
-          free.sort((a, b) => a.localeCompare(b));
+          free.sort((a, b) => a.name.localeCompare(b.name));
           if (free.length > 0) result.set(key, free);
         });
       });
@@ -1010,7 +1003,8 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                     {group.rows.map((entry, entryIndex) => {
                                       const domain = getClassDomain(entry.className || "");
                                       const freeKey = `${domain}|${entry.fixedSlotLabel}|${entry.weekday}`;
-                                      const freeTeachers = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
+                                      const freeAll = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
+                                      const freePriority = freeAll.filter(t => t.daysActive.has(entry.weekday) && t.centresActive.has(entry.centerName));
                                       return (
                                       <li key={`${entry.className}-${entryIndex}`} className="compact-item">
                                         <span className={`compact-dot status-dot--${entry.status.toLowerCase()}`} />
@@ -1020,13 +1014,20 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                             {entry.teacherName || "Chưa phân công"}
                                           </span>
                                           {entry.taName && <span className="compact-ta">TA: {entry.taName}</span>}
-                                          {freeTeachers.length > 0 && (
-                                            <span className="free-teacher-tooltip">
-                                              <span className="free-teacher-icon">&#128100;</span>
-                                              <span className="free-teacher-popover">
-                                                <strong>GV rảnh cùng khối ({domain}):</strong>
-                                                <ul>{freeTeachers.map((name) => <li key={name}>{name}</li>)}</ul>
-                                              </span>
+                                          {freeAll.length > 0 && (
+                                            <span
+                                              className="free-teacher-tooltip"
+                                              onClick={(e) => { e.stopPropagation(); setFreeModal({ freeKey, domain, slot: entry.fixedSlotLabel, day: entry.weekday, centre: entry.centerName }); }}
+                                            >
+                                              <span className="free-teacher-icon">&#128100; {freePriority.length > 0 ? `${freePriority.length} rảnh tại CS` : `GV rảnh`}</span>
+                                              {freePriority.length > 0 && (
+                                                <span className="free-teacher-popover">
+                                                  <strong>Ưu tiên · có lớp hôm nay tại CS:</strong>
+                                                  <ul>{freePriority.slice(0, 5).map(t => <li key={t.teacherKey}>{t.name}</li>)}</ul>
+                                                  {freePriority.length > 5 && <p className="more-hint">+{freePriority.length - 5} người khác...</p>}
+                                                  <p className="click-to-modal">↗ Click để xem toàn bộ</p>
+                                                </span>
+                                              )}
                                             </span>
                                           )}
                                         </div>
@@ -1046,7 +1047,8 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                     {group.rows.map((entry, entryIndex) => {
                                       const domain = getClassDomain(entry.className || "");
                                       const freeKey = `${domain}|${entry.fixedSlotLabel}|${entry.weekday}`;
-                                      const freeTeachers = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
+                                      const freeAll = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
+                                      const freePriority = freeAll.filter(t => t.daysActive.has(entry.weekday) && t.centresActive.has(entry.centerName));
                                       return (
                                       <article
                                         className={`calendar-card calendar-card--compact status-${entry.status.toLowerCase()} class-domain-${getClassDomain(entry.className || "")}`}
@@ -1065,13 +1067,20 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                         {entry.isSpecialSlot && (
                                           <span className="special-slot-badge">{entry.slotLabel}</span>
                                         )}
-                                        {freeTeachers.length > 0 && (
-                                          <span className="free-teacher-tooltip">
-                                            <span className="free-teacher-icon">&#128100; GV rảnh</span>
-                                            <span className="free-teacher-popover">
-                                              <strong>GV rảnh cùng khối ({domain}):</strong>
-                                              <ul>{freeTeachers.map((name) => <li key={name}>{name}</li>)}</ul>
-                                            </span>
+                                        {freeAll.length > 0 && (
+                                          <span
+                                            className="free-teacher-tooltip"
+                                            onClick={(e) => { e.stopPropagation(); setFreeModal({ freeKey, domain, slot: entry.fixedSlotLabel, day: entry.weekday, centre: entry.centerName }); }}
+                                          >
+                                            <span className="free-teacher-icon">&#128100; {freePriority.length > 0 ? `${freePriority.length} rảnh tại CS` : `GV rảnh`}</span>
+                                            {freePriority.length > 0 && (
+                                              <span className="free-teacher-popover">
+                                                <strong>Ưu tiên · có lớp hôm nay tại CS:</strong>
+                                                <ul>{freePriority.slice(0, 5).map(t => <li key={t.teacherKey}>{t.name}</li>)}</ul>
+                                                {freePriority.length > 5 && <p className="more-hint">+{freePriority.length - 5} người khác...</p>}
+                                                <p className="click-to-modal">↗ Click để xem toàn bộ</p>
+                                              </span>
+                                            )}
                                           </span>
                                         )}
                                       </article>
@@ -1091,6 +1100,38 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </div>
           </section>
         )}
+
+        {freeModal && (() => {
+          const allFree = freeTeachersBySlot.get(freeModal.freeKey) ?? [];
+          const priority = allFree.filter(t => t.daysActive.has(freeModal.day) && t.centresActive.has(freeModal.centre));
+          const priorityKeys = new Set(priority.map(t => t.teacherKey));
+          const others = allFree.filter(t => !priorityKeys.has(t.teacherKey));
+          return (
+            <div className="free-modal-overlay" onClick={() => setFreeModal(null)}>
+              <div className="free-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="free-modal-header">
+                  <h3>GV rảnh · {freeModal.domain} · {freeModal.slot} · {freeModal.day}</h3>
+                  <button className="free-modal-close" onClick={() => setFreeModal(null)}>✕</button>
+                </div>
+                <div className="free-modal-body">
+                  {priority.length > 0 && (
+                    <section>
+                      <h4>Ưu tiên — có lớp hôm nay tại {freeModal.centre}</h4>
+                      <ul>{priority.map(t => <li key={t.teacherKey}>{t.name}</li>)}</ul>
+                    </section>
+                  )}
+                  {others.length > 0 && (
+                    <section>
+                      <h4>Toàn bộ GV rảnh cùng khối</h4>
+                      <ul>{others.map(t => <li key={t.teacherKey}>{t.name}</li>)}</ul>
+                    </section>
+                  )}
+                  {allFree.length === 0 && <p>Không có GV rảnh.</p>}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {activeModule === "classes" && (
           <section className="content-section">
