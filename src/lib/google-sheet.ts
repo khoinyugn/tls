@@ -186,25 +186,26 @@ function getFirstSessionDate(rangeStart: Date, weekday: WeekdayLabel): Date {
   return new Date(rangeStart.getTime() + offset * DAY_MS);
 }
 
-function inferTeacherInfo(rawValue: string): { teacherName: string; teacherCode: string } {
+function inferTeacherInfo(rawValue: string): { teacherName: string; teacherCode: string; role: string } {
   const source = rawValue.trim();
   if (!source) {
-    return { teacherName: "", teacherCode: "" };
+    return { teacherName: "", teacherCode: "", role: "" };
   }
 
-  // Example: "Do Truong Vu - vudt (Lecturer)"
-  const match = source.match(/^(.*?)\s*-\s*([^(]+?)(?:\s*\(|$)/);
+  // Example: "Do Truong Vu - vudt (Lecturer)" or "Nguyen Van A - abc (Teacher Assistant)"
+  const match = source.match(/^(.*?)\s*-\s*([^(]+?)(?:\s*\(([^)]*)\))?\s*$/);
   if (match) {
     return {
       teacherName: match[1].trim(),
       teacherCode: match[2].trim().toLowerCase(),
+      role: (match[3] ?? "").trim(),
     };
   }
 
-  return { teacherName: source, teacherCode: "" };
+  return { teacherName: source, teacherCode: "", role: "" };
 }
 
-function extractTeacherEntries(rawValue: string): Array<{ teacherName: string; teacherCode: string }> {
+function extractTeacherEntries(rawValue: string): Array<{ teacherName: string; teacherCode: string; role: string }> {
   const source = rawValue.trim();
   if (!source) {
     return [];
@@ -217,9 +218,9 @@ function extractTeacherEntries(rawValue: string): Array<{ teacherName: string; t
 }
 
 function mergeTeacherEntries(
-  ...groups: Array<Array<{ teacherName: string; teacherCode: string }>>
-): Array<{ teacherName: string; teacherCode: string }> {
-  const merged: Array<{ teacherName: string; teacherCode: string }> = [];
+  ...groups: Array<Array<{ teacherName: string; teacherCode: string; role: string }>>
+): Array<{ teacherName: string; teacherCode: string; role: string }> {
+  const merged: Array<{ teacherName: string; teacherCode: string; role: string }> = [];
   const seen = new Set<string>();
 
   for (const group of groups) {
@@ -378,9 +379,9 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const slotValue = pickValue(row, ["time", "ca", "slot", "time_slot"]);
     const startDateRaw = pickValueOrdered(row, ["ngay bat dau", "ngay_bat_dau", "date start", "start_date"]);
     const endDateRaw = pickValueOrdered(row, ["ngay ket thuc", "ngay_ket_thuc", "date end", "end_date"]);
-    // "teachers" is the actual column name in the sheet; "lec" is the LEC column alias.
-    const lecRaw = pickValueOrdered(row, ["lec", "teachers", "teacher"]);
-    const taRaw = pickValue(row, ["ta"]);
+    // Read all teachers from the teachers/lec column; role is embedded as "(Lecturer)" or "(Teacher Assistant)".
+    const allTeachersRaw = pickValueOrdered(row, ["lec", "teachers", "teacher"]);
+    const taColumnRaw = pickValue(row, ["ta"]);
     const course = pickValue(row, ["course-f", "course"]);
     const status = pickValue(row, ["status"]);
     const studentCountRaw = pickValue(row, [
@@ -401,12 +402,17 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const fixedSlotLabel = resolveFixedSlotLabel(slotLabel);
     const termStartDate = parseDateValue(startDateRaw);
     const termEndDate = parseDateValue(endDateRaw);
-    const lecEntries = extractTeacherEntries(lecRaw);
-    const taEntries = extractTeacherEntries(taRaw);
+    const allEntries = extractTeacherEntries(allTeachersRaw);
+    // Entries tagged (Lecturer) → main teacher; if multiple, use the last one.
+    const lecEntries = allEntries.filter((e) => /lecturer/i.test(e.role));
+    // Entries tagged (Teacher Assistant) → TA; fall back to dedicated TA column.
+    const taEntriesFromRole = allEntries.filter((e) => /assistant/i.test(e.role));
+    const taEntriesFromColumn = extractTeacherEntries(taColumnRaw);
+    const taEntries = taEntriesFromRole.length > 0 ? taEntriesFromRole : taEntriesFromColumn;
     const teacherEntries = mergeTeacherEntries(lecEntries, taEntries);
-    // Teacher displayed = last LEC entry (if multiple teachers in LEC, take the last one).
-    const teacherInfo = lecEntries.at(-1) ?? { teacherName: "", teacherCode: "" };
-    const taInfo = taEntries[0] ?? { teacherName: "", teacherCode: "" };
+    // If no (Lecturer) tag found, fall back to last entry in all entries.
+    const teacherInfo = lecEntries.at(-1) ?? allEntries.at(-1) ?? { teacherName: "", teacherCode: "", role: "" };
+    const taInfo = taEntries[0] ?? { teacherName: "", teacherCode: "", role: "" };
     const slotTime = splitSlot(slotLabel);
     const studentCount = parseStudentCount(studentCountRaw);
 
