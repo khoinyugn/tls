@@ -378,9 +378,8 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const slotValue = pickValue(row, ["time", "ca", "slot", "time_slot"]);
     const startDateRaw = pickValueOrdered(row, ["ngay bat dau", "ngay_bat_dau", "date start", "start_date"]);
     const endDateRaw = pickValueOrdered(row, ["ngay ket thuc", "ngay_ket_thuc", "date end", "end_date"]);
-    // "teachers" is the actual column name; keep legacy aliases for backward compatibility.
-    const lecRaw = pickValueOrdered(row, ["lec", "teachers", "teacher", "mentor"]);
-    const mentorRaw = pickValue(row, ["mentor"]);
+    // "teachers" is the actual column name in the sheet; "lec" is the LEC column alias.
+    const lecRaw = pickValueOrdered(row, ["lec", "teachers", "teacher"]);
     const taRaw = pickValue(row, ["ta"]);
     const course = pickValue(row, ["course-f", "course"]);
     const status = pickValue(row, ["status"]);
@@ -403,10 +402,10 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const termStartDate = parseDateValue(startDateRaw);
     const termEndDate = parseDateValue(endDateRaw);
     const lecEntries = extractTeacherEntries(lecRaw);
-    const mentorEntries = extractTeacherEntries(mentorRaw);
     const taEntries = extractTeacherEntries(taRaw);
-    const teacherEntries = mergeTeacherEntries(lecEntries, mentorEntries, taEntries);
-    const teacherInfo = lecEntries.at(-1) ?? mentorEntries.at(-1) ?? { teacherName: "", teacherCode: "" };
+    const teacherEntries = mergeTeacherEntries(lecEntries, taEntries);
+    // Teacher displayed = last LEC entry (if multiple teachers in LEC, take the last one).
+    const teacherInfo = lecEntries.at(-1) ?? { teacherName: "", teacherCode: "" };
     const taInfo = taEntries[0] ?? { teacherName: "", teacherCode: "" };
     const slotTime = splitSlot(slotLabel);
     const studentCount = parseStudentCount(studentCountRaw);
