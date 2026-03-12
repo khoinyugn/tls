@@ -94,6 +94,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   const [classDateFrom, setClassDateFrom] = useState("");
   const [classDateTo, setClassDateTo] = useState("");
   const [freeModal, setFreeModal] = useState<{ freeKey: string; domain: string; slot: string; day: string; centre: string } | null>(null);
+  const [selectedEntry, setSelectedEntry] = useState<TeacherScheduleRow | null>(null);
 
   // Live data state
   const [rows, setRows] = useState<TeacherScheduleRow[]>(initialRows);
@@ -1005,7 +1006,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                       const freeAll = domain !== "default" ? (freeTeachersBySlot.get(freeKey) ?? []) : [];
                                       const freePriority = freeAll.filter(t => t.daysActive.has(entry.weekday) && t.centresActive.has(entry.centerName));
                                       return (
-                                      <li key={`${entry.className}-${entryIndex}`} className="compact-item">
+                                      <li key={`${entry.className}-${entryIndex}`} className="compact-item" onClick={() => setSelectedEntry(entry)} style={{ cursor: "pointer" }}>
                                         <span className={`compact-dot status-dot--${entry.status.toLowerCase()}`} />
                                         <div className="compact-info">
                                           <strong>{entry.className}</strong>
@@ -1052,6 +1053,8 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                                       <article
                                         className={`calendar-card calendar-card--compact status-${entry.status.toLowerCase()} class-domain-${getClassDomain(entry.className || "")}`}
                                         key={`${entry.teacherCode}-${entry.className}-${entryIndex}`}
+                                        onClick={() => setSelectedEntry(entry)}
+                                        style={{ cursor: "pointer" }}
                                       >
                                         <div className="card-header-row">
                                           <h4>{entry.className}</h4>
@@ -1126,6 +1129,65 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                     </section>
                   )}
                   {allFree.length === 0 && <p>Không có GV rảnh.</p>}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {selectedEntry && (() => {
+          const domain = getClassDomain(selectedEntry.className || "");
+          return (
+            <div className="free-modal-overlay" onClick={() => setSelectedEntry(null)}>
+              <div className={`class-detail-modal class-detail-modal--${domain}`} onClick={(e) => e.stopPropagation()}>
+                <div className="class-detail-header">
+                  <div>
+                    <p className="class-detail-eyebrow">{selectedEntry.centerName || ""} · {selectedEntry.weekday} · {selectedEntry.slotLabel}</p>
+                    <h3 className="class-detail-title">{selectedEntry.className}</h3>
+                  </div>
+                  <button className="class-detail-close" onClick={() => setSelectedEntry(null)}>✕</button>
+                </div>
+                <div className="class-detail-body">
+                  <div className="class-detail-grid">
+                    <div className="class-detail-card">
+                      <span className="class-detail-label">Giờ học</span>
+                      <span className="class-detail-value">{selectedEntry.slotLabel}</span>
+                    </div>
+                    <div className="class-detail-card">
+                      <span className="class-detail-label">Ngày trong tuần</span>
+                      <span className="class-detail-value">{selectedEntry.weekday}</span>
+                    </div>
+                    <div className="class-detail-card">
+                      <span className="class-detail-label">Trạng thái</span>
+                      <span className={`status-badge status-badge--${selectedEntry.status.toLowerCase()}`}>{selectedEntry.status}</span>
+                    </div>
+                    <div className="class-detail-card">
+                      <span className="class-detail-label">Số học sinh</span>
+                      <span className="class-detail-value">{selectedEntry.studentCount > 0 ? selectedEntry.studentCount : "–"}</span>
+                    </div>
+                  </div>
+                  <div className="class-detail-people">
+                    <div className="class-detail-person">
+                      <span className="class-detail-role class-detail-role--lec">LEC</span>
+                      <span className="class-detail-name">{selectedEntry.teacherName || "–"}</span>
+                    </div>
+                    {selectedEntry.taName && (
+                      <div className="class-detail-person">
+                        <span className="class-detail-role class-detail-role--ta">TA</span>
+                        <span className="class-detail-name">{selectedEntry.taName}</span>
+                      </div>
+                    )}
+                    {selectedEntry.supplyName && (
+                      <div className="class-detail-person">
+                        <span className="class-detail-role class-detail-role--supply">Supply</span>
+                        <span className="class-detail-name">{selectedEntry.supplyName}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="class-detail-footer">
+                    <span>Ngày học: <strong>{selectedEntry.sessionDate}</strong></span>
+                    <span>Khóa: <strong>{selectedEntry.termStartDate} – {selectedEntry.termEndDate}</strong></span>
+                  </div>
                 </div>
               </div>
             </div>
