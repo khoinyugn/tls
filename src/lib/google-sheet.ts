@@ -333,6 +333,33 @@ function parseCsvRows(csvContent: string): RawRow[] {
   return parsed.data;
 }
 
+async function fetchStudentCountMap(): Promise<Map<string, number>> {
+  const sheetId = process.env.GOOGLE_SHEET_ID;
+  if (!sheetId) return new Map();
+
+  // Read from gid=0 (main sheet) which has the student_count column at col S.
+  // An optional override sheet name can be set via GOOGLE_SHEET_CLASSES_NAME.
+  const classesSheetName = process.env.GOOGLE_SHEET_CLASSES_NAME;
+  const url = classesSheetName
+    ? `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&sheet=${encodeURIComponent(classesSheetName)}`
+    : `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=0`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return new Map();
+    const rows = parseCsvRows(await res.text());
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      const cn = pickValue(row, ["class", "lop", "class_name"]);
+      const countRaw = pickValue(row, ["student_count", "students", "student_number", "so luong hoc vien"]);
+      const count = parseStudentCount(countRaw);
+      if (cn && count > 0) map.set(cn, count);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
 function getGoogleSheetCsvUrl(): string {
   const directCsvUrl = process.env.GOOGLE_SHEET_CSV_URL;
   if (directCsvUrl) {
@@ -358,9 +385,10 @@ function getGoogleSheetCsvUrl(): string {
 
 export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
   const csvUrl = getGoogleSheetCsvUrl();
-  const response = await fetch(csvUrl, {
-    cache: "no-store",
-  });
+  const [response, studentCountMap] = await Promise.all([
+    fetch(csvUrl, { cache: "no-store" }),
+    fetchStudentCountMap(),
+  ]);
 
   if (!response.ok) {
     throw new Error(`Unable to fetch Google Sheet CSV: ${response.status}`);
@@ -385,11 +413,9 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const course = pickValue(row, ["course-f", "course"]);
     const status = pickValue(row, ["status"]);
     const studentCountRaw = pickValue(row, [
-      "so luong hoc vien",
-      "si so",
-      "student count",
+      "student_count",
       "students",
-      "student_number",
+      "student_number"
     ]);
 
     // Derive weekday from start_date ISO datetime (UTC+7) when no dedicated weekday column exists.
@@ -409,12 +435,16 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
     const taEntriesFromRole = allEntries.filter((e) => /assistant/i.test(e.role));
     const taEntriesFromColumn = extractTeacherEntries(taColumnRaw);
     const taEntries = taEntriesFromRole.length > 0 ? taEntriesFromRole : taEntriesFromColumn;
-    const teacherEntries = mergeTeacherEntries(lecEntries, taEntries);
+    // Entries not tagged as Lecturer or TA → Supply.
+    const supplyEntries = allEntries.filter((e) => !/lecturer/i.test(e.role) && !/assistant/i.test(e.role));
+    const teacherEntries = mergeTeacherEntries(lecEntries, taEntries, supplyEntries);
     // If no (Lecturer) tag found, fall back to last entry in all entries.
     const teacherInfo = lecEntries.at(-1) ?? allEntries.at(-1) ?? { teacherName: "", teacherCode: "", role: "" };
     const taInfo = taEntries[0] ?? { teacherName: "", teacherCode: "", role: "" };
+    const supplyInfo = supplyEntries[0] ?? { teacherName: "", teacherCode: "", role: "" };
+    const supplyNameFull = supplyEntries.map((e) => e.teacherName).filter(Boolean).join(", ");
     const slotTime = splitSlot(slotLabel);
-    const studentCount = parseStudentCount(studentCountRaw);
+    const studentCount = parseStudentCount(studentCountRaw) || studentCountMap.get(className) || 0;
 
     if (!className || !termStartDate || !termEndDate) {
       continue;
@@ -429,6 +459,7 @@ export async function getTeacherSchedules(): Promise<TeacherScheduleRow[]> {
         teacherCode: teacherInfo.teacherCode,
         teacherName: teacherInfo.teacherName,
         taName: taInfo.teacherName,
+        supplyName: supplyNameFull,
         teacherNames: teacherEntries.map((entry) => entry.teacherName).filter(Boolean),
         weekday,
         slotLabel,
