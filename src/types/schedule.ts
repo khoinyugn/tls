@@ -4,6 +4,7 @@ export type TeacherScheduleRow = {
   teacherCode: string;
   teacherName: string;
   taName: string;
+  supplyName: string;
   teacherNames: string[];
   weekday: WeekdayLabel;
   slotLabel: string;
