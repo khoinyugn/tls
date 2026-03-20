@@ -1,25 +1,49 @@
 import ScheduleDashboard from "@/components/schedule-dashboard";
-import { buildWeeklySlots, getTeacherSchedules } from "@/lib/google-sheet";
+import { buildWeeklySlots, getTeacherSchedules, getWaitingCasesByCenter, getWaitingDetailReport } from "@/lib/google-sheet";
 
 export const dynamic = "force-dynamic";
 
 async function loadScheduleData() {
   try {
-    const rows = await getTeacherSchedules();
+    const [rows, waitingCasesByCenter] = await Promise.all([getTeacherSchedules(), getWaitingCasesByCenter()]);
+    const waitingDetailReport = await getWaitingDetailReport(waitingCasesByCenter);
     const slots = buildWeeklySlots();
 
-    return { rows, slots, error: "" };
+    return { rows, slots, waitingCasesByCenter, waitingDetailReport, error: "" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return { rows: [], slots: [], error: message };
+    return {
+      rows: [],
+      slots: [],
+      waitingCasesByCenter: [],
+      waitingDetailReport: {
+        totalCases: 0,
+        totalWaitingCases: 0,
+        overallWaitingRate: "-",
+        centerCount: 0,
+        cases: [],
+        byCenter: [],
+        byType: [],
+        byCourseLine: [],
+        byDate: [],
+      },
+      error: message,
+    };
   }
 }
 
 export default async function Home() {
-  const { rows, slots, error } = await loadScheduleData();
+  const { rows, slots, waitingCasesByCenter, waitingDetailReport, error } = await loadScheduleData();
 
   if (!error) {
-    return <ScheduleDashboard rows={rows} slots={slots} />;
+    return (
+      <ScheduleDashboard
+        rows={rows}
+        slots={slots}
+        waitingCasesByCenter={waitingCasesByCenter}
+        waitingDetailReport={waitingDetailReport}
+      />
+    );
   }
 
   return (

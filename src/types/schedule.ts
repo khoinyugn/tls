@@ -32,6 +32,59 @@ export type WeeklySlot = {
   period: "Sang" | "Chieu" | "Toi" | "Dac biet";
 };
 
+export type WaitingCaseByCenter = {
+  centerName: string;
+  waitingCaseCount: number;
+  waitingRate: string;
+};
+
+export type WaitingDetailCenterRow = {
+  centerName: string;
+  detailWaitingCases: number;
+  detailTotalCases: number;
+  detailWaitingRate: string;
+  summaryWaitingCases: number;
+  summaryWaitingRate: string;
+  deltaCases: number;
+};
+
+export type WaitingDetailByType = {
+  type: string;
+  waitingCases: number;
+  totalCases: number;
+  waitingRate: string;
+};
+
+export type WaitingDetailByCourseLine = {
+  courseLine: string;
+  waitingCases: number;
+};
+
+export type WaitingDetailByDate = {
+  date: string;
+  waitingCases: number;
+};
+
+export type WaitingDetailCase = {
+  centerName: string;
+  type: string;
+  courseLines: string[];
+  date: string;
+  outcomeStatus: string;
+};
+
+export type WaitingDetailReport = {
+  totalCases: number;
+  totalWaitingCases: number;
+  overallWaitingRate: string;
+  centerCount: number;
+  cases: WaitingDetailCase[];
+  byCenter: WaitingDetailCenterRow[];
+  byType: WaitingDetailByType[];
+  byCourseLine: WaitingDetailByCourseLine[];
+  byDate: WaitingDetailByDate[];
+};
+
 export const BASE_WEEKLY_SLOTS: WeeklySlot[] = [
   { label: "08:00 - 10:00", period: "Sang" },
   { label: "10:00 - 12:00", period: "Sang" },
