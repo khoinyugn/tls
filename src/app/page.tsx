@@ -1,21 +1,32 @@
 import ScheduleDashboard from "@/components/schedule-dashboard";
-import { buildWeeklySlots, getTeacherSchedules, getWaitingCasesByCenter, getWaitingDetailReport } from "@/lib/google-sheet";
+import {
+  buildWeeklySlots,
+  getTeacherSchedules,
+  getWaitingCasesByCenter,
+  getWaitingCasesByCourseLineSummary,
+  getWaitingDetailReport,
+} from "@/lib/google-sheet";
 
 export const dynamic = "force-dynamic";
 
 async function loadScheduleData() {
   try {
-    const [rows, waitingCasesByCenter] = await Promise.all([getTeacherSchedules(), getWaitingCasesByCenter()]);
+    const [rows, waitingCasesByCenter, waitingCasesByCourseLineSummary] = await Promise.all([
+      getTeacherSchedules(),
+      getWaitingCasesByCenter(),
+      getWaitingCasesByCourseLineSummary(),
+    ]);
     const waitingDetailReport = await getWaitingDetailReport(waitingCasesByCenter);
     const slots = buildWeeklySlots();
 
-    return { rows, slots, waitingCasesByCenter, waitingDetailReport, error: "" };
+    return { rows, slots, waitingCasesByCenter, waitingCasesByCourseLineSummary, waitingDetailReport, error: "" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return {
       rows: [],
       slots: [],
       waitingCasesByCenter: [],
+      waitingCasesByCourseLineSummary: [],
       waitingDetailReport: {
         totalCases: 0,
         totalWaitingCases: 0,
@@ -33,7 +44,7 @@ async function loadScheduleData() {
 }
 
 export default async function Home() {
-  const { rows, slots, waitingCasesByCenter, waitingDetailReport, error } = await loadScheduleData();
+  const { rows, slots, waitingCasesByCenter, waitingCasesByCourseLineSummary, waitingDetailReport, error } = await loadScheduleData();
 
   if (!error) {
     return (
@@ -41,6 +52,7 @@ export default async function Home() {
         rows={rows}
         slots={slots}
         waitingCasesByCenter={waitingCasesByCenter}
+        waitingCasesByCourseLineSummary={waitingCasesByCourseLineSummary}
         waitingDetailReport={waitingDetailReport}
       />
     );

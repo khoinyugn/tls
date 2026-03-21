@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   TeacherScheduleRow,
   WaitingCaseByCenter,
+  WaitingCaseByCourseLineSummary,
   WaitingDetailReport,
   WEEKDAYS,
   WeeklySlot,
@@ -16,6 +17,7 @@ type ScheduleDashboardProps = {
   rows: TeacherScheduleRow[];
   slots: WeeklySlot[];
   waitingCasesByCenter: WaitingCaseByCenter[];
+  waitingCasesByCourseLineSummary: WaitingCaseByCourseLineSummary[];
   waitingDetailReport: WaitingDetailReport;
 };
 
@@ -42,12 +44,71 @@ function getClassDomain(className: string): ClassDomain {
   const normalized = className.toUpperCase();
 
   if (normalized.includes("XART")) return "art";
-  if (normalized.includes("ROB")) return "robotics";
-  if (normalized.includes("C4K") || normalized.includes("JS") || normalized.includes("CS") || normalized.includes("PT")) {
+  if (normalized.includes("ROB") || normalized.includes("KIND")) return "robotics";
+  if (normalized.includes("C4K") || normalized.includes("C4T") || normalized.includes("JS") || normalized.includes("CS") || normalized.includes("PT")) {
     return "coding";
   }
 
   return "default";
+}
+
+function getBlocksFromCourseLineValue(courseLineValue: string): BlockFilter[] {
+  const tokens = courseLineValue
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const hasArt = tokens.some((token) => token === "XART" || token === "ART");
+  // Art is exclusive and does not share data with Coding/Robotics.
+  if (hasArt) {
+    return ["art"];
+  }
+
+  const blocks = new Set<BlockFilter>();
+  for (const token of tokens) {
+    if (token === "C4K" || token === "C4T" || token === "JS" || token === "CS" || token === "PT") {
+      blocks.add("coding");
+    }
+    if (token === "ROB" || token === "KIND") {
+      blocks.add("robotics");
+    }
+    if (token === "XART" || token === "ART") {
+      blocks.add("art");
+    }
+  }
+
+  return Array.from(blocks);
+}
+
+function getEffectiveWaitingBlocks(selectedBlocks: BlockFilter[]): Set<BlockFilter> {
+  return new Set<BlockFilter>(selectedBlocks);
+}
+
+function normalizeSummaryCourseLineLabel(courseLineValue: string): string {
+  const tokens = courseLineValue
+    .toUpperCase()
+    .split(/[;,]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) return "Khong ro";
+
+  // Art rows like "XART" and "XART; XART" should be treated as one group.
+  if (tokens.every((token) => token === "XART" || token === "ART")) {
+    return "XART";
+  }
+
+  const uniqueTokens: string[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (!seen.has(token)) {
+      seen.add(token);
+      uniqueTokens.push(token);
+    }
+  }
+
+  return uniqueTokens.join("; ");
 }
 
 function groupEntriesByCenter(entries: TeacherScheduleRow[]) {
@@ -107,6 +168,16 @@ function parsePercentValue(rateText: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+function isUnknownLabel(value: string): boolean {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  return normalized.includes("khongro") || normalized.includes("unknown");
+}
+
 function waitingToneClass(value: number, maxValue: number): string {
   if (value <= 0 || maxValue <= 0) return "waiting-tone-0";
   const ratio = value / maxValue;
@@ -115,10 +186,15 @@ function waitingToneClass(value: number, maxValue: number): string {
   return "waiting-tone-1";
 }
 
+function displayCount(value: number): string {
+  return value === 0 ? "" : String(value);
+}
+
 export default function ScheduleDashboard({
   rows: initialRows,
   slots: initialSlots,
   waitingCasesByCenter: initialWaitingCasesByCenter,
+  waitingCasesByCourseLineSummary: initialWaitingCasesByCourseLineSummary,
   waitingDetailReport: initialWaitingDetailReport,
 }: ScheduleDashboardProps) {
   const [activeModule, setActiveModule] = useState<ActiveModule>("weekly");
@@ -139,6 +215,7 @@ export default function ScheduleDashboard({
   const [rows, setRows] = useState<TeacherScheduleRow[]>(initialRows);
   const [slots, setSlots] = useState<WeeklySlot[]>(initialSlots);
   const [waitingCasesByCenter, setWaitingCasesByCenter] = useState<WaitingCaseByCenter[]>(initialWaitingCasesByCenter);
+  const [waitingCasesByCourseLineSummary, setWaitingCasesByCourseLineSummary] = useState<WaitingCaseByCourseLineSummary[]>(initialWaitingCasesByCourseLineSummary);
   const [waitingDetailReport, setWaitingDetailReport] = useState<WaitingDetailReport>(initialWaitingDetailReport);
   const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -154,11 +231,13 @@ export default function ScheduleDashboard({
         rows: TeacherScheduleRow[];
         slots: WeeklySlot[];
         waitingCasesByCenter: WaitingCaseByCenter[];
+        waitingCasesByCourseLineSummary: WaitingCaseByCourseLineSummary[];
         waitingDetailReport: WaitingDetailReport;
       };
       setRows(data.rows);
       setSlots(data.slots);
       setWaitingCasesByCenter(data.waitingCasesByCenter ?? []);
+      setWaitingCasesByCourseLineSummary(data.waitingCasesByCourseLineSummary ?? []);
       setWaitingDetailReport(data.waitingDetailReport ?? {
         totalCases: 0,
         totalWaitingCases: 0,
@@ -733,15 +812,80 @@ export default function ScheduleDashboard({
     return rows;
   }, [reportData.teacherRows, teacherSort]);
 
+  const waitingSummaryBaseRows = useMemo(() => {
+    const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
+    if (effectiveSelectedBlocks.size === 0) {
+      return waitingCasesByCenter;
+    }
+    const centerCounter = new Map<string, number>();
+
+    for (const row of waitingCasesByCourseLineSummary) {
+      const blocks = getBlocksFromCourseLineValue(row.courseLines);
+      if (!blocks.some((block) => effectiveSelectedBlocks.has(block))) {
+        continue;
+      }
+
+      for (const [centerName, count] of Object.entries(row.centerCounts)) {
+        centerCounter.set(centerName, (centerCounter.get(centerName) ?? 0) + count);
+      }
+    }
+
+    return Array.from(centerCounter.entries())
+      .filter(([, waitingCaseCount]) => waitingCaseCount > 0)
+      .map(([centerName, waitingCaseCount]) => ({
+        centerName,
+        waitingCaseCount,
+        waitingRate: "-",
+      }))
+      .sort((a, b) => b.waitingCaseCount - a.waitingCaseCount || a.centerName.localeCompare(b.centerName));
+  }, [waitingCasesByCenter, waitingCasesByCourseLineSummary, selectedBlocks]);
+
   const waitingSummaryRows = useMemo(() => {
-    if (selectedCenters.length === 0) return waitingCasesByCenter;
-    return waitingCasesByCenter.filter((row) => selectedCenters.includes(row.centerName));
-  }, [waitingCasesByCenter, selectedCenters]);
+    if (selectedCenters.length === 0) return waitingSummaryBaseRows;
+    return waitingSummaryBaseRows.filter((row) => selectedCenters.includes(row.centerName));
+  }, [waitingSummaryBaseRows, selectedCenters]);
 
   const waitingCasesFiltered = useMemo(() => {
-    if (selectedCenters.length === 0) return waitingDetailReport.cases;
-    return waitingDetailReport.cases.filter((row) => selectedCenters.includes(row.centerName));
-  }, [waitingDetailReport.cases, selectedCenters]);
+    let rows = selectedCenters.length === 0
+      ? waitingDetailReport.cases
+      : waitingDetailReport.cases.filter((row) => selectedCenters.includes(row.centerName));
+
+    const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
+    if (effectiveSelectedBlocks.size > 0) {
+      rows = rows.filter((row) => {
+        const rowBlocks = new Set<BlockFilter>();
+        const courseLineValues = row.courseLines.length > 0 ? row.courseLines : ["Khong ro"];
+        for (const value of courseLineValues) {
+          for (const block of getBlocksFromCourseLineValue(value)) {
+            rowBlocks.add(block);
+          }
+        }
+        return Array.from(rowBlocks).some((block) => effectiveSelectedBlocks.has(block));
+      });
+    }
+
+    return rows;
+  }, [waitingDetailReport.cases, selectedCenters, selectedBlocks]);
+
+  const waitingBlockTotals = useMemo(() => {
+    const totals: Record<BlockFilter, number> = { coding: 0, robotics: 0, art: 0 };
+
+    for (const row of waitingCasesByCourseLineSummary) {
+      const blocks = getBlocksFromCourseLineValue(row.courseLines);
+      if (blocks.length === 0) continue;
+
+      const rowTotal = selectedCenters.length > 0
+        ? selectedCenters.reduce((sum, centerName) => sum + (row.centerCounts[centerName] ?? 0), 0)
+        : Object.values(row.centerCounts).reduce((sum, value) => sum + value, 0);
+
+      if (rowTotal <= 0) continue;
+      for (const block of blocks) {
+        totals[block] += rowTotal;
+      }
+    }
+
+    return totals;
+  }, [waitingCasesByCourseLineSummary, selectedCenters]);
 
   const waitingTotalCases = useMemo(
     () => waitingSummaryRows.reduce((sum, item) => sum + item.waitingCaseCount, 0),
@@ -808,58 +952,67 @@ export default function ScheduleDashboard({
       .map((row) => row.centerName);
   }, [waitingByCenterRows]);
 
-  const waitingByCourseRows = useMemo(() => {
-    const counter = new Map<string, number>();
-    for (const item of waitingCasesFiltered) {
-      if (item.outcomeStatus !== "WAITING") continue;
-      if (item.courseLines.length === 0) {
-        counter.set("Khong ro", (counter.get("Khong ro") ?? 0) + 1);
-      } else {
-        for (const line of item.courseLines) {
-          counter.set(line, (counter.get(line) ?? 0) + 1);
+  const waitingCourseSummaryRows = useMemo(() => {
+    const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
+    const merged = new Map<string, Record<string, number>>();
+
+    for (const row of waitingCasesByCourseLineSummary) {
+      if (effectiveSelectedBlocks.size > 0) {
+        const blocks = getBlocksFromCourseLineValue(row.courseLines);
+        if (!blocks.some((block) => effectiveSelectedBlocks.has(block))) {
+          continue;
         }
       }
+
+      const normalizedCourseLine = normalizeSummaryCourseLineLabel(row.courseLines);
+      const currentCounts = merged.get(normalizedCourseLine) ?? {};
+
+      const centerCounts = selectedCenters.length > 0
+        ? Object.fromEntries(
+          selectedCenters.map((centerName) => [centerName, row.centerCounts[centerName] ?? 0]),
+        )
+        : row.centerCounts;
+
+      for (const [centerName, count] of Object.entries(centerCounts)) {
+        currentCounts[centerName] = (currentCounts[centerName] ?? 0) + count;
+      }
+
+      merged.set(normalizedCourseLine, currentCounts);
     }
-    return Array.from(counter.entries())
-      .map(([courseLine, waitingCases]) => ({ courseLine, waitingCases }))
+
+    return Array.from(merged.entries())
+      .map(([courseLines, centerCounts]) => ({
+        courseLines,
+        centerCounts,
+        totalCases: Object.values(centerCounts).reduce((sum, value) => sum + value, 0),
+      }))
+      .filter((row) => row.totalCases > 0)
+      .sort((a, b) => b.totalCases - a.totalCases || a.courseLines.localeCompare(b.courseLines));
+  }, [waitingCasesByCourseLineSummary, selectedBlocks, selectedCenters]);
+
+  const waitingByCourseRows = useMemo(() => {
+    return waitingCourseSummaryRows
+      .map((row) => ({ courseLine: row.courseLines, waitingCases: row.totalCases }))
       .sort((a, b) => b.waitingCases - a.waitingCases || a.courseLine.localeCompare(b.courseLine));
-  }, [waitingCasesFiltered]);
+  }, [waitingCourseSummaryRows]);
 
   const waitingCourseColumns = useMemo(() => {
     return waitingByCourseRows.map((row) => row.courseLine);
   }, [waitingByCourseRows]);
 
   const waitingByCenterCourseRows = useMemo(() => {
-    const centerCourseCounter = new Map<string, Map<string, number>>();
+    const centerNames = selectedCenters.length > 0
+      ? selectedCenters
+      : waitingSummaryRows.map((row) => row.centerName);
 
-    for (const item of waitingCasesFiltered) {
-      if (item.outcomeStatus !== "WAITING") continue;
-      const center = item.centerName || "Khong ro";
-      const courseLines = item.courseLines.length > 0 ? item.courseLines : ["Khong ro"];
-
-      if (!centerCourseCounter.has(center)) {
-        centerCourseCounter.set(center, new Map<string, number>());
-      }
-
-      const courseMap = centerCourseCounter.get(center)!;
-      for (const courseLine of courseLines) {
-        courseMap.set(courseLine, (courseMap.get(courseLine) ?? 0) + 1);
-      }
-    }
-
-    const centerNames = new Set<string>([
-      ...Array.from(centerCourseCounter.keys()),
-      ...waitingCenterColumns,
-    ]);
-
-    return Array.from(centerNames)
+    return Array.from(new Set(centerNames))
       .map((centerName) => {
-        const courseMap = centerCourseCounter.get(centerName) ?? new Map<string, number>();
         const counts: Record<string, number> = {};
         let total = 0;
 
         for (const courseLine of waitingCourseColumns) {
-          const value = courseMap.get(courseLine) ?? 0;
+          const sourceRow = waitingCourseSummaryRows.find((row) => row.courseLines === courseLine);
+          const value = sourceRow?.centerCounts[centerName] ?? 0;
           counts[courseLine] = value;
           total += value;
         }
@@ -868,7 +1021,7 @@ export default function ScheduleDashboard({
       })
       .filter((row) => row.total > 0)
       .sort((a, b) => b.total - a.total || a.centerName.localeCompare(b.centerName));
-  }, [waitingCasesFiltered, waitingCourseColumns, waitingCenterColumns]);
+  }, [selectedCenters, waitingSummaryRows, waitingCourseColumns, waitingCourseSummaryRows]);
 
   const waitingCourseCellMax = useMemo(() => {
     return Math.max(
@@ -893,6 +1046,19 @@ export default function ScheduleDashboard({
       };
     });
   }, [waitingByCourseRows, waitingCenterColumns, waitingByCenterCourseRows]);
+
+  const waitingHeatmapCenterTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const centerName of waitingCenterColumns) {
+      totals[centerName] = waitingCourseHeatmapRows.reduce((sum, row) => {
+        const cell = row.cells.find((item) => item.centerName === centerName);
+        return sum + (cell?.value ?? 0);
+      }, 0);
+    }
+
+    const grandTotal = Object.values(totals).reduce((sum, value) => sum + value, 0);
+    return { totals, grandTotal };
+  }, [waitingCenterColumns, waitingCourseHeatmapRows]);
 
   const waitingByDateRows = useMemo(() => {
     const counter = new Map<string, number>();
@@ -967,6 +1133,12 @@ export default function ScheduleDashboard({
     }));
   }, [waitingByDateRows]);
 
+  const waitingTypeSidebarRows = useMemo(() => {
+    return waitingByTypeRows
+      .filter((row) => row.waitingCases > 0)
+      .slice(0, 5);
+  }, [waitingByTypeRows]);
+
   return (
     <div className="app-shell">
       {/* ── SIDEBAR ── */}
@@ -1030,6 +1202,26 @@ export default function ScheduleDashboard({
           </div>
         </div>
 
+        {activeModule === "waiting" && (
+          <div className="sidebar-section waiting-type-sidebar">
+            {waitingTypeSidebarRows.length === 0 ? (
+              <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.75rem" }}>Không có dữ liệu</p>
+            ) : (
+              <div className="waiting-type-mini-list">
+                {waitingTypeSidebarRows.map((row) => (
+                  <article key={`waiting-type-mini-${row.type}`} className="waiting-type-mini-item">
+                    <p className="waiting-type-mini-name">{row.type}</p>
+                    <div className="waiting-type-mini-metrics">
+                      <strong>{row.waitingCases}</strong>
+                      <span>{row.waitingRate}</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <nav className="sidebar-nav sidebar-section">
           <p className="nav-section-label">Modules</p>
           <button
@@ -1073,7 +1265,7 @@ export default function ScheduleDashboard({
               <path d="M12 8v5l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
             </svg>
-            <span>Case waiting theo cơ sở</span>
+            <span>OH Report</span>
           </button>
         </nav>
 
@@ -1700,14 +1892,14 @@ export default function ScheduleDashboard({
           <section className="content-section">
             <div className="content-header">
               <div>
-                <h2 className="content-title">Thống kê chi tiết trạng thái Waiting</h2>
+                <h2 className="content-title">Report thống kê và phân tích OH</h2>
                 <p className="report-note">Sheet tổng hợp: gid=1122383044 | Sheet chi tiết case: gid=1227175209</p>
-                <p className="report-note">
+                {/* <p className="report-note">
                   Bộ lọc cơ sở: {selectedCenters.length > 0 ? selectedCenters.join(", ") : "Tất cả cơ sở"}
                 </p>
-                <p className="report-note" style={{ fontSize: "0.76rem", opacity: 0.9 }}>
-                  Ghi chú: Các dòng có ABANDONED sẽ bị loại khỏi toàn bộ thống kê chi tiết, kể cả khi dòng đó có WAITING.
-                </p>
+                <p className="report-note">
+                  Bộ lọc khối: {selectedBlocks.length > 0 ? selectedBlocks.join(", ") : "Tất cả khối"}
+                </p> */}
               </div>
             </div>
 
@@ -1742,7 +1934,7 @@ export default function ScheduleDashboard({
               <>
                 <section className="report-block">
                   <h3>1) Biểu đồ nhanh</h3>
-                  <div className="waiting-chart-grid" style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: "0.8rem" }}>
+                  <div className="waiting-chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.8rem" }}>
                     <article className="waiting-chart-card">
                       <h4>Top cơ sở theo waiting</h4>
                       <p>So sánh số waiting giữa sheet tổng hợp và sheet chi tiết.</p>
@@ -1797,7 +1989,7 @@ export default function ScheduleDashboard({
                               <div className="waiting-date-col-bar-wrap" style={{ width: "100%", height: "130px", borderRadius: "8px 8px 6px 6px", background: "#edf3fa", display: "flex", alignItems: "flex-end", justifyContent: "center", overflow: "hidden", padding: "0 2px" }}>
                                 <span className="waiting-date-col-bar" style={{ height: `${Math.max(row.percent, 6)}%`, width: "100%", display: "block", borderRadius: "6px 6px 3px 3px" }} />
                               </div>
-                              <strong>{row.waitingCases}</strong>
+                              <strong>{displayCount(row.waitingCases)}</strong>
                               <span>{row.date}</span>
                             </div>
                           ))}
@@ -1829,11 +2021,35 @@ export default function ScheduleDashboard({
                           <tr key={`${row.centerName}-${index}`}>
                             <td>{index + 1}</td>
                             <td>{row.centerName}</td>
-                            <td className={waitingToneClass(row.summaryWaitingCases, waitingCenterMax)}>{row.summaryWaitingCases}</td>
-                            <td className={waitingToneClass(parsePercentValue(row.summaryWaitingRate), 100)}>{row.summaryWaitingRate}</td>
-                            <td className={waitingToneClass(row.detailWaitingCases, waitingCenterMax)}>{row.detailWaitingCases}</td>
+                            <td
+                              className={row.summaryWaitingCases > 0
+                                ? `${waitingToneClass(row.summaryWaitingCases, waitingCenterMax)} waiting-matrix-hit`
+                                : waitingToneClass(row.summaryWaitingCases, waitingCenterMax)}
+                            >
+                              {row.summaryWaitingCases}
+                            </td>
+                            <td
+                              className={parsePercentValue(row.summaryWaitingRate) > 0
+                                ? `${waitingToneClass(parsePercentValue(row.summaryWaitingRate), 100)} waiting-matrix-hit`
+                                : waitingToneClass(parsePercentValue(row.summaryWaitingRate), 100)}
+                            >
+                              {row.summaryWaitingRate}
+                            </td>
+                            <td
+                              className={row.detailWaitingCases > 0
+                                ? `${waitingToneClass(row.detailWaitingCases, waitingCenterMax)} waiting-matrix-hit`
+                                : waitingToneClass(row.detailWaitingCases, waitingCenterMax)}
+                            >
+                              {row.detailWaitingCases}
+                            </td>
                             <td>{row.detailTotalCases}</td>
-                            <td className={waitingToneClass(parsePercentValue(row.detailWaitingRate), 100)}>{row.detailWaitingRate}</td>
+                            <td
+                              className={parsePercentValue(row.detailWaitingRate) > 0
+                                ? `${waitingToneClass(parsePercentValue(row.detailWaitingRate), 100)} waiting-matrix-hit`
+                                : waitingToneClass(parsePercentValue(row.detailWaitingRate), 100)}
+                            >
+                              {row.detailWaitingRate}
+                            </td>
                             <td className={row.deltaCases !== 0 ? "conflict-cell waiting-delta-cell" : "waiting-delta-cell"}>{row.deltaCases}</td>
                           </tr>
                         ))}
@@ -1843,36 +2059,7 @@ export default function ScheduleDashboard({
                 </section>
 
                 <section className="report-block">
-                  <h3>3) Phân rã theo loại case</h3>
-                  <div className="table-wrap">
-                    <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-type")}> 
-                      {renderTableColGroup("waiting-type", 5)}
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Type</th>
-                          <th>Waiting cases</th>
-                          <th>Total cases</th>
-                          <th>Waiting rate</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {waitingByTypeRows.map((row, index) => (
-                          <tr key={`${row.type}-${index}`}>
-                            <td>{index + 1}</td>
-                            <td>{row.type}</td>
-                            <td className={waitingToneClass(row.waitingCases, waitingTypeMax)}>{row.waitingCases}</td>
-                            <td>{row.totalCases}</td>
-                            <td className={waitingToneClass(parsePercentValue(row.waitingRate), 100)}>{row.waitingRate}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                <section className="report-block">
-                  <h3>4) Waiting theo course line</h3>
+                  <h3>3) Waiting theo course line</h3>
                   <div className="waiting-chart-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.8rem" }}>
                     <article className="waiting-chart-card">
                       <h4>Heatmap waiting theo course line x cơ sở</h4>
@@ -1881,7 +2068,8 @@ export default function ScheduleDashboard({
                         {waitingCourseHeatmapRows.length === 0 ? (
                           <p className="muted">Không có dữ liệu course line để hiển thị heatmap.</p>
                         ) : (
-                          <table className="resizable-table" style={{ minWidth: `${Math.max(860, waitingCenterColumns.length * 120 + 240)}px` }}>
+                          <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-heatmap")} style={{ minWidth: `${Math.max(860, waitingCenterColumns.length * 120 + 240)}px` }}>
+                            {renderTableColGroup("waiting-heatmap", waitingCenterColumns.length + 2)}
                             <thead>
                               <tr>
                                 <th>Course line</th>
@@ -1898,57 +2086,48 @@ export default function ScheduleDashboard({
                                   {row.cells.map((cell) => (
                                     <td
                                       key={`waiting-heatmap-cell-${row.courseLine}-${cell.centerName}`}
-                                      className={cell.value > 0 ? `${waitingToneClass(cell.value, waitingCourseCellMax)} waiting-matrix-hit` : waitingToneClass(cell.value, waitingCourseCellMax)}
+                                      className={[
+                                        cell.value > 0 ? `${waitingToneClass(cell.value, waitingCourseCellMax)} waiting-matrix-hit` : waitingToneClass(cell.value, waitingCourseCellMax),
+                                        cell.value > 0 && (isUnknownLabel(row.courseLine) || isUnknownLabel(cell.centerName)) ? "unknown-emphasis-soft" : "",
+                                      ].filter(Boolean).join(" ")}
                                     >
-                                      {cell.value}
+                                      {displayCount(cell.value)}
                                     </td>
                                   ))}
-                                  <td className={waitingToneClass(row.total, waitingCourseMax)}><strong>{row.total}</strong></td>
+                                  <td
+                                    className={[
+                                      waitingToneClass(row.total, waitingCourseMax),
+                                      row.total > 0 && isUnknownLabel(row.courseLine) ? "unknown-emphasis-soft" : "",
+                                    ].filter(Boolean).join(" ")}
+                                  >
+                                    <strong>{displayCount(row.total)}</strong>
+                                  </td>
                                 </tr>
                               ))}
+                              <tr className="waiting-heatmap-total-row">
+                                <td><strong>Tổng theo cơ sở</strong></td>
+                                {waitingCenterColumns.map((centerName) => {
+                                  const value = waitingHeatmapCenterTotals.totals[centerName] ?? 0;
+                                  return (
+                                    <td key={`waiting-heatmap-total-${centerName}`} className="waiting-heatmap-total-cell">
+                                      <strong>{displayCount(value)}</strong>
+                                    </td>
+                                  );
+                                })}
+                                <td className="waiting-heatmap-total-cell">
+                                  <strong>{displayCount(waitingHeatmapCenterTotals.grandTotal)}</strong>
+                                </td>
+                              </tr>
                             </tbody>
                           </table>
                         )}
                       </div>
                     </article>
-
-                    <div className="table-wrap">
-                      <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-course")}> 
-                        {renderTableColGroup("waiting-course", waitingCourseColumns.length + 2)}
-                        <thead>
-                          <tr>
-                            <th>#</th>
-                            <th>Cơ sở</th>
-                            {waitingCourseColumns.map((courseLine) => (
-                              <th key={`waiting-course-head-${courseLine}`}>{courseLine}</th>
-                            ))}
-                            <th>Tổng waiting</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {waitingByCenterCourseRows.map((row, index) => (
-                            <tr key={`waiting-course-row-${row.centerName}-${index}`}>
-                              <td>{index + 1}</td>
-                              <td>{row.centerName}</td>
-                              {waitingCourseColumns.map((courseLine) => {
-                                const value = row.counts[courseLine] ?? 0;
-                                return (
-                                  <td key={`waiting-course-cell-${row.centerName}-${courseLine}`} className={waitingToneClass(value, waitingCourseCellMax)}>
-                                    {value}
-                                  </td>
-                                );
-                              })}
-                              <td className={waitingToneClass(row.total, waitingCourseMax)}><strong>{row.total}</strong></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
                   </div>
                 </section>
 
                 <section className="report-block">
-                  <h3>5) Waiting theo ngày</h3>
+                  <h3>4) Waiting theo ngày</h3>
                   <div className="table-wrap">
                     <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-date")}> 
                       {renderTableColGroup("waiting-date", waitingCenterColumns.length + 2)}
@@ -1974,14 +2153,17 @@ export default function ScheduleDashboard({
                                 return (
                                   <td
                                     key={`waiting-day-cell-${row.date}-${centerName}`}
-                                    className={value > 0 ? `${toneClass} waiting-matrix-hit` : toneClass}
+                                    className={[
+                                      value > 0 ? `${toneClass} waiting-matrix-hit` : toneClass,
+                                      value > 0 && (isUnknownLabel(centerName) || isUnknownLabel(row.date)) ? "unknown-emphasis-soft" : "",
+                                    ].filter(Boolean).join(" ")}
                                   >
-                                    {value}
+                                    {displayCount(value)}
                                   </td>
                                 );
                               })()
                             ))}
-                            <td className={waitingToneClass(row.total, waitingDayTotalMax)}><strong>{row.total}</strong></td>
+                            <td className={waitingToneClass(row.total, waitingDayTotalMax)}><strong>{displayCount(row.total)}</strong></td>
                           </tr>
                         ))}
                       </tbody>

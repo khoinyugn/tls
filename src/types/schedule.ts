@@ -38,6 +38,12 @@ export type WaitingCaseByCenter = {
   waitingRate: string;
 };
 
+export type WaitingCaseByCourseLineSummary = {
+  courseLines: string;
+  centerCounts: Record<string, number>;
+  totalCases: number;
+};
+
 export type WaitingDetailCenterRow = {
   centerName: string;
   detailWaitingCases: number;

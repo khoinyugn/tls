@@ -3,6 +3,7 @@ import {
   BASE_WEEKLY_SLOTS,
   TeacherScheduleRow,
   WaitingCaseByCenter,
+  WaitingCaseByCourseLineSummary,
   WaitingDetailCase,
   WaitingDetailByCourseLine,
   WaitingDetailByDate,
@@ -424,6 +425,43 @@ function normalizeOutcomeStatus(rawValue: string): string {
   return "";
 }
 
+function normalizeDetailCondition(rawValue: string): string {
+  const token = normalizeKey(rawValue).toUpperCase();
+  if (token === "APPROVED" || token === "APPROVE") return "APPROVED";
+  if (token === "CONFIRMED" || token === "CONFIRM") return "CONFIRMED";
+  if (token === "PENDING") return "PENDING";
+  return "";
+}
+
+function extractDetailCondition(row: RawRow): string {
+  const direct = pickValueOrdered(row, [
+    "condition",
+    "appointment_condition",
+    "lead_condition",
+    "booking_condition",
+    "status",
+    "lead_status",
+    "booking_status",
+    "state",
+    "trang thai",
+    "tinh trang",
+  ]);
+
+  const directNormalized = normalizeDetailCondition(direct);
+  if (directNormalized) {
+    return directNormalized;
+  }
+
+  for (const value of Object.values(row)) {
+    const normalized = normalizeDetailCondition(normalizeText(value));
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
 function extractOutcomeStatus(row: RawRow): string {
   // Source sheet can contain both ABANDONED/PASSED in one column and WAITING in another.
   // For waiting analytics, prioritize WAITING when it appears anywhere in the row.
@@ -486,6 +524,11 @@ export async function getWaitingDetailReport(summaryByCenter: WaitingCaseByCente
   let totalWaitingCases = 0;
 
   for (const row of rows) {
+    const detailCondition = extractDetailCondition(row);
+    if (!["APPROVED", "CONFIRMED", "PENDING"].includes(detailCondition)) {
+      continue;
+    }
+
     const statusesInRow = Object.values(row)
       .map((value) => normalizeOutcomeStatus(normalizeText(value)))
       .filter(Boolean);
@@ -679,6 +722,76 @@ export async function getWaitingCasesByCenter(): Promise<WaitingCaseByCenter[]> 
       waitingRate: waitingRateByCenter.get(centerName) ?? "-",
     }))
     .sort((a, b) => b.waitingCaseCount - a.waitingCaseCount || a.centerName.localeCompare(b.centerName));
+}
+
+export async function getWaitingCasesByCourseLineSummary(): Promise<WaitingCaseByCourseLineSummary[]> {
+  const response = await fetch(buildWaitingSheetCsvUrl(), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Unable to fetch waiting cases CSV: ${response.status}`);
+  }
+
+  const table = parseCsvTable(await response.text());
+  const headerIndex = table.findIndex((row) => {
+    const normalizedCells = row.map((cell) => normalizeKey(cell));
+    return normalizedCells.includes("courselines") && normalizedCells.some((cell) => cell.includes("hcm") || cell.includes("centre") || cell.includes("center"));
+  });
+
+  if (headerIndex < 0) {
+    return [];
+  }
+
+  const headerRow = table[headerIndex];
+  const normalizedHeader = headerRow.map((cell) => normalizeKey(cell));
+  const courseLineColIndex = normalizedHeader.findIndex((key) => key === "courselines" || key === "courseline" || key === "courselines");
+  if (courseLineColIndex < 0) {
+    return [];
+  }
+
+  const centerColumns: Array<{ index: number; centerName: string }> = [];
+  for (let index = courseLineColIndex + 1; index < headerRow.length; index += 1) {
+    const centerName = normalizeText(headerRow[index]);
+    if (!centerName) continue;
+
+    const normalized = normalizeKey(centerName);
+    if (normalized === "total" || normalized === "grandtotal") continue;
+    centerColumns.push({ index, centerName });
+  }
+
+  if (centerColumns.length === 0) {
+    return [];
+  }
+
+  const rows: WaitingCaseByCourseLineSummary[] = [];
+  for (let i = headerIndex + 1; i < table.length; i += 1) {
+    const currentRow = table[i];
+    const courseLinesRaw = normalizeText(currentRow[courseLineColIndex]);
+    if (normalizeKey(courseLinesRaw).includes("grandtotal")) {
+      break;
+    }
+
+    const centerCounts: Record<string, number> = {};
+    let totalCases = 0;
+    let hasData = false;
+
+    for (const column of centerColumns) {
+      const count = parseStudentCount(normalizeText(currentRow[column.index]));
+      centerCounts[column.centerName] = count;
+      totalCases += count;
+      if (count > 0) hasData = true;
+    }
+
+    if (!hasData) {
+      continue;
+    }
+
+    rows.push({
+      courseLines: courseLinesRaw || "Khong ro",
+      centerCounts,
+      totalCases,
+    });
+  }
+
+  return rows.sort((a, b) => b.totalCases - a.totalCases || a.courseLines.localeCompare(b.courseLines));
 }
 
 async function fetchStudentCountMap(): Promise<Map<string, number>> {
