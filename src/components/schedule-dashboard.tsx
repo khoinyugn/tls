@@ -1,14 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TeacherScheduleRow, WEEKDAYS, WeeklySlot } from "@/types/schedule";
+import {
+  TeacherScheduleRow,
+  WaitingCaseByCenter,
+  WaitingCaseByCourseLineSummary,
+  WaitingDetailReport,
+  WEEKDAYS,
+  WeeklySlot,
+} from "@/types/schedule";
 import { buildWeeklyMatrix } from "@/lib/google-sheet";
 
-type ActiveModule = "weekly" | "classes" | "report";
+type ActiveModule = "weekly" | "classes" | "report" | "waiting";
 
 type ScheduleDashboardProps = {
   rows: TeacherScheduleRow[];
   slots: WeeklySlot[];
+  waitingCasesByCenter: WaitingCaseByCenter[];
+  waitingCasesByCourseLineSummary: WaitingCaseByCourseLineSummary[];
+  waitingDetailReport: WaitingDetailReport;
 };
 
 const WEEKDAY_OFFSET: Record<(typeof WEEKDAYS)[number], number> = {
@@ -25,6 +35,16 @@ const INTENSITY_RANK: Record<string, number> = { Thấp: 1, "Trung bình": 2, Ca
 const DISPATCH_RANK: Record<string, number> = { "Tập trung": 1, "Trung bình": 2, Rộng: 3 };
 const WORKLOAD_RANK: Record<string, number> = { Nhẹ: 1, Vừa: 2, Nặng: 3 };
 const CLASS_SIZE_RANK: Record<string, number> = { "Lớp nhỏ": 1, "Lớp trung bình": 2, "Lớp đông": 3 };
+const REPORT_CENTER_BAR_COLORS = [
+  "#1f6fd2",
+  "#de8a00",
+  "#2a9d55",
+  "#d34779",
+  "#6a4c93",
+  "#00838f",
+  "#b83b1f",
+  "#4a6572",
+];
 
 type ClassDomain = "coding" | "robotics" | "art" | "default";
 type BlockFilter = "coding" | "robotics" | "art";
@@ -34,12 +54,71 @@ function getClassDomain(className: string): ClassDomain {
   const normalized = className.toUpperCase();
 
   if (normalized.includes("XART")) return "art";
-  if (normalized.includes("ROB")) return "robotics";
-  if (normalized.includes("C4K") || normalized.includes("JS") || normalized.includes("CS") || normalized.includes("PT")) {
+  if (normalized.includes("ROB") || normalized.includes("KIND")) return "robotics";
+  if (normalized.includes("C4K") || normalized.includes("C4T") || normalized.includes("JS") || normalized.includes("CS") || normalized.includes("PT")) {
     return "coding";
   }
 
   return "default";
+}
+
+function getBlocksFromCourseLineValue(courseLineValue: string): BlockFilter[] {
+  const tokens = courseLineValue
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const hasArt = tokens.some((token) => token === "XART" || token === "ART");
+  // Art is exclusive and does not share data with Coding/Robotics.
+  if (hasArt) {
+    return ["art"];
+  }
+
+  const blocks = new Set<BlockFilter>();
+  for (const token of tokens) {
+    if (token === "C4K" || token === "C4T" || token === "JS" || token === "CS" || token === "PT") {
+      blocks.add("coding");
+    }
+    if (token === "ROB" || token === "KIND") {
+      blocks.add("robotics");
+    }
+    if (token === "XART" || token === "ART") {
+      blocks.add("art");
+    }
+  }
+
+  return Array.from(blocks);
+}
+
+function getEffectiveWaitingBlocks(selectedBlocks: BlockFilter[]): Set<BlockFilter> {
+  return new Set<BlockFilter>(selectedBlocks);
+}
+
+function normalizeSummaryCourseLineLabel(courseLineValue: string): string {
+  const tokens = courseLineValue
+    .toUpperCase()
+    .split(/[;,]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) return "Khong ro";
+
+  // Art rows like "XART" and "XART; XART" should be treated as one group.
+  if (tokens.every((token) => token === "XART" || token === "ART")) {
+    return "XART";
+  }
+
+  const uniqueTokens: string[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (!seen.has(token)) {
+      seen.add(token);
+      uniqueTokens.push(token);
+    }
+  }
+
+  return uniqueTokens.join("; ");
 }
 
 function groupEntriesByCenter(entries: TeacherScheduleRow[]) {
@@ -81,7 +160,53 @@ function getCurrentWeekKey(): string {
   return monday.toISOString().slice(0, 10);
 }
 
-export default function ScheduleDashboard({ rows: initialRows, slots: initialSlots }: ScheduleDashboardProps) {
+function percentText(numerator: number, denominator: number): string {
+  if (denominator <= 0) return "-";
+  return `${((numerator / denominator) * 100).toFixed(2)}%`;
+}
+
+function dateKey(dateText: string): number {
+  const match = dateText.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  return Number(match[3]) * 10000 + Number(match[2]) * 100 + Number(match[1]);
+}
+
+function parsePercentValue(rateText: string): number {
+  const normalized = rateText.replace(/[^0-9.]/g, "");
+  if (!normalized) return 0;
+  const parsed = Number(normalized);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function isUnknownLabel(value: string): boolean {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  return normalized.includes("khongro") || normalized.includes("unknown");
+}
+
+function waitingToneClass(value: number, maxValue: number): string {
+  if (value <= 0 || maxValue <= 0) return "waiting-tone-0";
+  const ratio = value / maxValue;
+  if (ratio >= 0.75) return "waiting-tone-3";
+  if (ratio >= 0.45) return "waiting-tone-2";
+  return "waiting-tone-1";
+}
+
+function displayCount(value: number): string {
+  return value === 0 ? "" : String(value);
+}
+
+export default function ScheduleDashboard({
+  rows: initialRows,
+  slots: initialSlots,
+  waitingCasesByCenter: initialWaitingCasesByCenter,
+  waitingCasesByCourseLineSummary: initialWaitingCasesByCourseLineSummary,
+  waitingDetailReport: initialWaitingDetailReport,
+}: ScheduleDashboardProps) {
   const [activeModule, setActiveModule] = useState<ActiveModule>("weekly");
   const [weeklyTeacherSearch, setWeeklyTeacherSearch] = useState("");
   const [selectedCenters, setSelectedCenters] = useState<string[]>([]);
@@ -93,12 +218,16 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
   const [classTeacherSearch, setClassTeacherSearch] = useState("");
   const [classDateFrom, setClassDateFrom] = useState("");
   const [classDateTo, setClassDateTo] = useState("");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [freeModal, setFreeModal] = useState<{ freeKey: string; domain: string; slot: string; day: string; centre: string } | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<TeacherScheduleRow | null>(null);
 
   // Live data state
   const [rows, setRows] = useState<TeacherScheduleRow[]>(initialRows);
   const [slots, setSlots] = useState<WeeklySlot[]>(initialSlots);
+  const [waitingCasesByCenter, setWaitingCasesByCenter] = useState<WaitingCaseByCenter[]>(initialWaitingCasesByCenter);
+  const [waitingCasesByCourseLineSummary, setWaitingCasesByCourseLineSummary] = useState<WaitingCaseByCourseLineSummary[]>(initialWaitingCasesByCourseLineSummary);
+  const [waitingDetailReport, setWaitingDetailReport] = useState<WaitingDetailReport>(initialWaitingDetailReport);
   const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState("");
@@ -109,9 +238,28 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     try {
       const res = await fetch("/api/schedule", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { rows: TeacherScheduleRow[]; slots: WeeklySlot[] };
+      const data = await res.json() as {
+        rows: TeacherScheduleRow[];
+        slots: WeeklySlot[];
+        waitingCasesByCenter: WaitingCaseByCenter[];
+        waitingCasesByCourseLineSummary: WaitingCaseByCourseLineSummary[];
+        waitingDetailReport: WaitingDetailReport;
+      };
       setRows(data.rows);
       setSlots(data.slots);
+      setWaitingCasesByCenter(data.waitingCasesByCenter ?? []);
+      setWaitingCasesByCourseLineSummary(data.waitingCasesByCourseLineSummary ?? []);
+      setWaitingDetailReport(data.waitingDetailReport ?? {
+        totalCases: 0,
+        totalWaitingCases: 0,
+        overallWaitingRate: "-",
+        centerCount: 0,
+        cases: [],
+        byCenter: [],
+        byType: [],
+        byCourseLine: [],
+        byDate: [],
+      });
       setLastUpdated(new Date());
     } catch (err) {
       setRefreshError(err instanceof Error ? err.message : "Lỗi kết nối");
@@ -675,8 +823,357 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
     return rows;
   }, [reportData.teacherRows, teacherSort]);
 
+  const reportWeekdayChart = useMemo(() => {
+    let rows = activeWeekKey ? filteredRows.filter((row) => row.weekKey === activeWeekKey) : filteredRows;
+    if (selectedSlots.length > 0) {
+      rows = rows.filter((row) => selectedSlots.includes(row.fixedSlotLabel));
+    }
+
+    const centers = Array.from(
+      new Set(rows.map((row) => row.centerName?.trim()).filter(Boolean)),
+    ) as string[];
+    centers.sort((a, b) => a.localeCompare(b));
+
+    const byWeekday = WEEKDAYS.map((weekday) => {
+      const classSetByCenter = new Map<string, Set<string>>();
+      centers.forEach((center) => classSetByCenter.set(center, new Set<string>()));
+
+      for (const row of rows) {
+        if (row.weekday !== weekday) continue;
+        const centerName = row.centerName?.trim();
+        if (!centerName || !classSetByCenter.has(centerName)) continue;
+        const classKey = row.className?.trim();
+        if (!classKey) continue;
+        classSetByCenter.get(centerName)!.add(classKey);
+      }
+
+      const centerCounts: Record<string, number> = {};
+      let totalClasses = 0;
+      for (const center of centers) {
+        const value = classSetByCenter.get(center)?.size ?? 0;
+        centerCounts[center] = value;
+        totalClasses += value;
+      }
+
+      return { weekday, centerCounts, totalClasses };
+    });
+
+    const maxValue = Math.max(
+      ...byWeekday.flatMap((row) => centers.map((center) => row.centerCounts[center] ?? 0)),
+      0,
+    );
+
+    return { centers, byWeekday, maxValue };
+  }, [filteredRows, activeWeekKey, selectedSlots]);
+
+  const waitingSummaryBaseRows = useMemo(() => {
+    const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
+    if (effectiveSelectedBlocks.size === 0) {
+      return waitingCasesByCenter;
+    }
+    const centerCounter = new Map<string, number>();
+
+    for (const row of waitingCasesByCourseLineSummary) {
+      const blocks = getBlocksFromCourseLineValue(row.courseLines);
+      if (!blocks.some((block) => effectiveSelectedBlocks.has(block))) {
+        continue;
+      }
+
+      for (const [centerName, count] of Object.entries(row.centerCounts)) {
+        centerCounter.set(centerName, (centerCounter.get(centerName) ?? 0) + count);
+      }
+    }
+
+    return Array.from(centerCounter.entries())
+      .filter(([, waitingCaseCount]) => waitingCaseCount > 0)
+      .map(([centerName, waitingCaseCount]) => ({
+        centerName,
+        waitingCaseCount,
+        waitingRate: "-",
+      }))
+      .sort((a, b) => b.waitingCaseCount - a.waitingCaseCount || a.centerName.localeCompare(b.centerName));
+  }, [waitingCasesByCenter, waitingCasesByCourseLineSummary, selectedBlocks]);
+
+  const waitingSummaryRows = useMemo(() => {
+    if (selectedCenters.length === 0) return waitingSummaryBaseRows;
+    return waitingSummaryBaseRows.filter((row) => selectedCenters.includes(row.centerName));
+  }, [waitingSummaryBaseRows, selectedCenters]);
+
+  const waitingCasesFiltered = useMemo(() => {
+    let rows = selectedCenters.length === 0
+      ? waitingDetailReport.cases
+      : waitingDetailReport.cases.filter((row) => selectedCenters.includes(row.centerName));
+
+    const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
+    if (effectiveSelectedBlocks.size > 0) {
+      rows = rows.filter((row) => {
+        const rowBlocks = new Set<BlockFilter>();
+        const courseLineValues = row.courseLines.length > 0 ? row.courseLines : ["Khong ro"];
+        for (const value of courseLineValues) {
+          for (const block of getBlocksFromCourseLineValue(value)) {
+            rowBlocks.add(block);
+          }
+        }
+        return Array.from(rowBlocks).some((block) => effectiveSelectedBlocks.has(block));
+      });
+    }
+
+    return rows;
+  }, [waitingDetailReport.cases, selectedCenters, selectedBlocks]);
+
+  const waitingTotalCases = useMemo(
+    () => waitingSummaryRows.reduce((sum, item) => sum + item.waitingCaseCount, 0),
+    [waitingSummaryRows],
+  );
+
+  const waitingByCenterRows = useMemo(() => {
+    const detailCounter = new Map<string, { waiting: number; total: number }>();
+    for (const item of waitingCasesFiltered) {
+      if (!detailCounter.has(item.centerName)) {
+        detailCounter.set(item.centerName, { waiting: 0, total: 0 });
+      }
+      detailCounter.get(item.centerName)!.total += 1;
+      if (item.outcomeStatus === "WAITING") {
+        detailCounter.get(item.centerName)!.waiting += 1;
+      }
+    }
+
+    const summaryMap = new Map(waitingSummaryRows.map((item) => [item.centerName, item]));
+    const centerNames = new Set<string>([
+      ...Array.from(detailCounter.keys()),
+      ...Array.from(summaryMap.keys()),
+    ]);
+
+    return Array.from(centerNames)
+      .map((centerName) => {
+        const detail = detailCounter.get(centerName) ?? { waiting: 0, total: 0 };
+        const summary = summaryMap.get(centerName);
+        const summaryWaiting = summary?.waitingCaseCount ?? 0;
+        return {
+          centerName,
+          detailWaitingCases: detail.waiting,
+          detailTotalCases: detail.total,
+          detailWaitingRate: percentText(detail.waiting, detail.total),
+          summaryWaitingCases: summaryWaiting,
+          summaryWaitingRate: summary?.waitingRate ?? "-",
+          deltaCases: detail.waiting - summaryWaiting,
+        };
+      })
+      .sort((a, b) => b.detailWaitingCases - a.detailWaitingCases || a.centerName.localeCompare(b.centerName));
+  }, [waitingCasesFiltered, waitingSummaryRows]);
+
+  const waitingByTypeRows = useMemo(() => {
+    const counter = new Map<string, { waiting: number; total: number }>();
+    for (const item of waitingCasesFiltered) {
+      const key = item.type || "Khong ro";
+      if (!counter.has(key)) counter.set(key, { waiting: 0, total: 0 });
+      counter.get(key)!.total += 1;
+      if (item.outcomeStatus === "WAITING") counter.get(key)!.waiting += 1;
+    }
+    return Array.from(counter.entries())
+      .map(([type, value]) => ({
+        type,
+        waitingCases: value.waiting,
+        totalCases: value.total,
+        waitingRate: percentText(value.waiting, value.total),
+      }))
+      .sort((a, b) => b.waitingCases - a.waitingCases || a.type.localeCompare(b.type));
+  }, [waitingCasesFiltered]);
+
+  const waitingCenterColumns = useMemo(() => {
+    return waitingByCenterRows
+      .filter((row) => row.detailWaitingCases > 0 || row.summaryWaitingCases > 0)
+      .map((row) => row.centerName);
+  }, [waitingByCenterRows]);
+
+  const waitingCourseSummaryRows = useMemo(() => {
+    const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
+    const merged = new Map<string, Record<string, number>>();
+
+    for (const row of waitingCasesByCourseLineSummary) {
+      if (effectiveSelectedBlocks.size > 0) {
+        const blocks = getBlocksFromCourseLineValue(row.courseLines);
+        if (!blocks.some((block) => effectiveSelectedBlocks.has(block))) {
+          continue;
+        }
+      }
+
+      const normalizedCourseLine = normalizeSummaryCourseLineLabel(row.courseLines);
+      const currentCounts = merged.get(normalizedCourseLine) ?? {};
+
+      const centerCounts = selectedCenters.length > 0
+        ? Object.fromEntries(
+          selectedCenters.map((centerName) => [centerName, row.centerCounts[centerName] ?? 0]),
+        )
+        : row.centerCounts;
+
+      for (const [centerName, count] of Object.entries(centerCounts)) {
+        currentCounts[centerName] = (currentCounts[centerName] ?? 0) + count;
+      }
+
+      merged.set(normalizedCourseLine, currentCounts);
+    }
+
+    return Array.from(merged.entries())
+      .map(([courseLines, centerCounts]) => ({
+        courseLines,
+        centerCounts,
+        totalCases: Object.values(centerCounts).reduce((sum, value) => sum + value, 0),
+      }))
+      .filter((row) => row.totalCases > 0)
+      .sort((a, b) => b.totalCases - a.totalCases || a.courseLines.localeCompare(b.courseLines));
+  }, [waitingCasesByCourseLineSummary, selectedBlocks, selectedCenters]);
+
+  const waitingByCourseRows = useMemo(() => {
+    return waitingCourseSummaryRows
+      .map((row) => ({ courseLine: row.courseLines, waitingCases: row.totalCases }))
+      .sort((a, b) => b.waitingCases - a.waitingCases || a.courseLine.localeCompare(b.courseLine));
+  }, [waitingCourseSummaryRows]);
+
+  const waitingCourseColumns = useMemo(() => {
+    return waitingByCourseRows.map((row) => row.courseLine);
+  }, [waitingByCourseRows]);
+
+  const waitingByCenterCourseRows = useMemo(() => {
+    const centerNames = selectedCenters.length > 0
+      ? selectedCenters
+      : waitingSummaryRows.map((row) => row.centerName);
+
+    return Array.from(new Set(centerNames))
+      .map((centerName) => {
+        const counts: Record<string, number> = {};
+        let total = 0;
+
+        for (const courseLine of waitingCourseColumns) {
+          const sourceRow = waitingCourseSummaryRows.find((row) => row.courseLines === courseLine);
+          const value = sourceRow?.centerCounts[centerName] ?? 0;
+          counts[courseLine] = value;
+          total += value;
+        }
+
+        return { centerName, counts, total };
+      })
+      .filter((row) => row.total > 0)
+      .sort((a, b) => b.total - a.total || a.centerName.localeCompare(b.centerName));
+  }, [selectedCenters, waitingSummaryRows, waitingCourseColumns, waitingCourseSummaryRows]);
+
+  const waitingCourseCellMax = useMemo(() => {
+    return Math.max(
+      ...waitingByCenterCourseRows.flatMap((row) => waitingCourseColumns.map((courseLine) => row.counts[courseLine] ?? 0)),
+      0,
+    );
+  }, [waitingByCenterCourseRows, waitingCourseColumns]);
+
+  const waitingCourseHeatmapRows = useMemo(() => {
+    const topCourses = waitingByCourseRows.slice(0, 12);
+    return topCourses.map((course) => {
+      const cells = waitingCenterColumns.map((centerName) => {
+        const centerRow = waitingByCenterCourseRows.find((row) => row.centerName === centerName);
+        const value = centerRow?.counts[course.courseLine] ?? 0;
+        return { centerName, value };
+      });
+
+      return {
+        courseLine: course.courseLine,
+        total: course.waitingCases,
+        cells,
+      };
+    });
+  }, [waitingByCourseRows, waitingCenterColumns, waitingByCenterCourseRows]);
+
+  const waitingHeatmapCenterTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const centerName of waitingCenterColumns) {
+      totals[centerName] = waitingCourseHeatmapRows.reduce((sum, row) => {
+        const cell = row.cells.find((item) => item.centerName === centerName);
+        return sum + (cell?.value ?? 0);
+      }, 0);
+    }
+
+    const grandTotal = Object.values(totals).reduce((sum, value) => sum + value, 0);
+    return { totals, grandTotal };
+  }, [waitingCenterColumns, waitingCourseHeatmapRows]);
+
+  const waitingByDateRows = useMemo(() => {
+    const counter = new Map<string, number>();
+    for (const item of waitingCasesFiltered) {
+      if (item.outcomeStatus !== "WAITING") continue;
+      const day = item.date || "Khong ro";
+      counter.set(day, (counter.get(day) ?? 0) + 1);
+    }
+    return Array.from(counter.entries())
+      .map(([date, waitingCases]) => ({ date, waitingCases }))
+      .sort((a, b) => dateKey(a.date) - dateKey(b.date));
+  }, [waitingCasesFiltered]);
+
+  const waitingByDateCenterRows = useMemo(() => {
+    const matrix = new Map<string, Map<string, number>>();
+
+    for (const item of waitingCasesFiltered) {
+      if (item.outcomeStatus !== "WAITING") continue;
+      const day = item.date || "Khong ro";
+      const center = item.centerName || "Khong ro";
+      if (!matrix.has(day)) matrix.set(day, new Map<string, number>());
+      const dayMap = matrix.get(day)!;
+      dayMap.set(center, (dayMap.get(center) ?? 0) + 1);
+    }
+
+    return Array.from(matrix.entries())
+      .map(([date, centerMap]) => {
+        const counts: Record<string, number> = {};
+        let total = 0;
+        for (const centerName of waitingCenterColumns) {
+          const value = centerMap.get(centerName) ?? 0;
+          counts[centerName] = value;
+          total += value;
+        }
+        return { date, counts, total };
+      })
+      .sort((a, b) => dateKey(a.date) - dateKey(b.date));
+  }, [waitingCasesFiltered, waitingCenterColumns]);
+
+  const waitingDetailTotalCases = waitingCasesFiltered.length;
+  const waitingDetailTotalWaitingCases = waitingCasesFiltered.filter((item) => item.outcomeStatus === "WAITING").length;
+  const waitingOverallRate = percentText(waitingDetailTotalWaitingCases, waitingDetailTotalCases);
+  const waitingCenterCount = waitingByCenterRows.filter((row) => row.detailWaitingCases > 0 || row.summaryWaitingCases > 0).length;
+  const waitingCenterMax = Math.max(...waitingByCenterRows.map((row) => row.detailWaitingCases), 0);
+  const waitingCourseMax = Math.max(...waitingByCourseRows.map((row) => row.waitingCases), 0);
+  const waitingDayTotalMax = Math.max(...waitingByDateCenterRows.map((row) => row.total), 0);
+
+  const waitingCenterChartRows = useMemo(() => {
+    const rows = waitingByCenterRows
+      .filter((row) => row.detailWaitingCases > 0 || row.summaryWaitingCases > 0)
+      .slice(0, 8);
+    const maxValue = Math.max(
+      ...rows.map((row) => Math.max(row.detailWaitingCases, row.summaryWaitingCases)),
+      0,
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      detailPercent: maxValue > 0 ? (row.detailWaitingCases / maxValue) * 100 : 0,
+      summaryPercent: maxValue > 0 ? (row.summaryWaitingCases / maxValue) * 100 : 0,
+    }));
+  }, [waitingByCenterRows]);
+
+  const waitingDateChartRows = useMemo(() => {
+    const rows = waitingByDateRows.filter((row) => row.waitingCases > 0);
+    const maxValue = Math.max(...rows.map((row) => row.waitingCases), 0);
+
+    return rows.map((row) => ({
+      ...row,
+      percent: maxValue > 0 ? (row.waitingCases / maxValue) * 100 : 0,
+    }));
+  }, [waitingByDateRows]);
+
+  const waitingTypeSidebarRows = useMemo(() => {
+    return waitingByTypeRows
+      .filter((row) => row.waitingCases > 0)
+      .slice(0, 5);
+  }, [waitingByTypeRows]);
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${isSidebarCollapsed ? " app-shell--sidebar-collapsed" : ""}`}>
       {/* ── SIDEBAR ── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
@@ -695,7 +1192,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
 
         <div className="sidebar-scroll">
 
-        <div className="sync-bar">
+        {!isSidebarCollapsed && <div className="sync-bar">
           <div className="sync-info">
             <span className={`sync-dot${isRefreshing ? " sync-dot--spinning" : ""}`} />
             <span className="sync-time">
@@ -721,9 +1218,9 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </svg>
           </button>
           {refreshError && <p className="sync-error">{refreshError}</p>}
-        </div>
+        </div>}
 
-        <div className="sidebar-stats sidebar-stats--top sidebar-section">
+        {!isSidebarCollapsed && <div className="sidebar-stats sidebar-stats--top sidebar-section">
           <div className="stat-card">
             <span className="stat-value">{sidebarKpis.classCount}</span>
             <span className="stat-label">Lớp</span>
@@ -736,23 +1233,45 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             <span className="stat-value">{sidebarKpis.buCount}</span>
             <span className="stat-label">BU</span>
           </div>
-        </div>
+        </div>}
+
+        {!isSidebarCollapsed && activeModule === "waiting" && (
+          <div className="sidebar-section waiting-type-sidebar">
+            {waitingTypeSidebarRows.length === 0 ? (
+              <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.75rem" }}>Không có dữ liệu</p>
+            ) : (
+              <div className="waiting-type-mini-list">
+                {waitingTypeSidebarRows.map((row) => (
+                  <article key={`waiting-type-mini-${row.type}`} className="waiting-type-mini-item">
+                    <p className="waiting-type-mini-name">{row.type}</p>
+                    <div className="waiting-type-mini-metrics">
+                      <strong>{row.waitingCases}</strong>
+                      <span>{row.waitingRate}</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <nav className="sidebar-nav sidebar-section">
-          <p className="nav-section-label">Modules</p>
+          {!isSidebarCollapsed && <p className="nav-section-label">Modules</p>}
           <button
             className={`nav-item${activeModule === "weekly" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("weekly")}
+            title="Lịch theo tuần"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" />
               <path d="M3 10h18M8 2v4M16 2v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-            <span>Lịch theo tuần</span>
+            {!isSidebarCollapsed && <span>Lịch theo tuần</span>}
           </button>
           <button
             className={`nav-item${activeModule === "classes" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("classes")}
+            title="Danh sách lớp"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <path
@@ -762,20 +1281,32 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                 strokeLinecap="round"
               />
             </svg>
-            <span>Danh sách lớp</span>
+            {!isSidebarCollapsed && <span>Danh sách lớp</span>}
           </button>
           <button
             className={`nav-item${activeModule === "report" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("report")}
+            title="Report phân tích"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <path d="M4 19h16M7 16V9m5 7V5m5 11v-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-            <span>Report phân tích</span>
+            {!isSidebarCollapsed && <span>Report phân tích</span>}
+          </button>
+          <button
+            className={`nav-item${activeModule === "waiting" ? " nav-item--active" : ""}`}
+            onClick={() => setActiveModule("waiting")}
+            title="OH Report"
+          >
+            <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
+              <path d="M12 8v5l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
+            </svg>
+            {!isSidebarCollapsed && <span>OH Report</span>}
           </button>
         </nav>
 
-        {activeModule === "weekly" && (
+        {!isSidebarCollapsed && activeModule === "weekly" && (
           <div className="sidebar-search sidebar-section">
             <p className="nav-section-label">Tìm kiếm</p>
             <div className="control-group control-group--search">
@@ -791,7 +1322,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           </div>
         )}
 
-        {activeModule === "classes" && (
+        {!isSidebarCollapsed && activeModule === "classes" && (
           <div className="sidebar-search sidebar-section">
             <p className="nav-section-label">Tìm kiếm</p>
             <div className="control-group control-group--search">
@@ -842,7 +1373,7 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           </div>
         )}
 
-        <div className="sidebar-controls sidebar-section">
+        {!isSidebarCollapsed && <div className="sidebar-controls sidebar-section">
           <p className="nav-section-label">Bộ lọc</p>
 
           <div className="control-group">
@@ -954,9 +1485,20 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
           )}
 
 
+        </div>}
+
+        {!isSidebarCollapsed && <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>}
         </div>
 
-        <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>
+        <div className="sidebar-collapse-dock">
+          <button
+            className="sidebar-collapse-btn"
+            onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+            title={isSidebarCollapsed ? "Mở rộng sidebar" : "Thu nhỏ sidebar"}
+            aria-label={isSidebarCollapsed ? "Mở rộng sidebar" : "Thu nhỏ sidebar"}
+          >
+            {isSidebarCollapsed ? "→" : "←"}
+          </button>
         </div>
       </aside>
 
@@ -1286,6 +1828,68 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
             </div>
 
             <section className="report-block">
+              <h3>Biểu đồ cột phân bổ số lượng lớp theo thứ trong tuần</h3>
+
+              {reportWeekdayChart.centers.length === 0 ? (
+                <div className="empty-state">
+                  <p>Không có dữ liệu để hiển thị biểu đồ.</p>
+                </div>
+              ) : (
+                <div className="report-weekday-chart-card">
+                  <div className="report-weekday-legend">
+                    {reportWeekdayChart.centers.map((centerName, centerIndex) => (
+                      <span key={`weekday-legend-${centerName}`}>
+                        <i
+                          style={{ backgroundColor: REPORT_CENTER_BAR_COLORS[centerIndex % REPORT_CENTER_BAR_COLORS.length] }}
+                        />
+                        {centerName}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="report-weekday-chart-scroll">
+                    <div
+                      className="report-weekday-groups"
+                      style={{ minWidth: `${Math.max(680, reportWeekdayChart.byWeekday.length * 170)}px` }}
+                    >
+                      {reportWeekdayChart.byWeekday.map((weekdayRow) => (
+                        <section key={`weekday-group-${weekdayRow.weekday}`} className="report-weekday-group">
+                          <p className="report-weekday-title">{weekdayRow.weekday}</p>
+                          <p className="report-weekday-subtotal">Tổng: {weekdayRow.totalClasses} lớp</p>
+
+                          <div className="report-weekday-bars">
+                            {reportWeekdayChart.centers.map((centerName, centerIndex) => {
+                              const value = weekdayRow.centerCounts[centerName] ?? 0;
+                              const heightPercent = reportWeekdayChart.maxValue > 0
+                                ? (value / reportWeekdayChart.maxValue) * 100
+                                : 0;
+
+                              return (
+                                <div key={`weekday-bar-${weekdayRow.weekday}-${centerName}`} className="report-weekday-bar-col">
+                                  <div className="report-weekday-bar-track">
+                                    <span
+                                      className="report-weekday-bar-fill"
+                                      style={{
+                                        height: `${Math.max(heightPercent, value > 0 ? 8 : 0)}%`,
+                                        backgroundColor: REPORT_CENTER_BAR_COLORS[centerIndex % REPORT_CENTER_BAR_COLORS.length],
+                                      }}
+                                    >
+                                      {value > 0 ? <span className="report-weekday-bar-value">{value}</span> : null}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="report-block">
               <h3>1) Phân tích thời gian lớp</h3>
               <div className="table-wrap">
                 <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "report-time")}> 
@@ -1390,6 +1994,294 @@ export default function ScheduleDashboard({ rows: initialRows, slots: initialSlo
                 </table>
               </div>
             </section>
+          </section>
+        )}
+
+        {/* Thống kê Waiting */}
+        {activeModule === "waiting" && (
+          <section className="content-section">
+            <div className="content-header">
+              <div>
+                <h2 className="content-title">Report thống kê và phân tích OH</h2>
+                <p className="report-note">Sheet tổng hợp: gid=1122383044 | Sheet chi tiết case: gid=1227175209</p>
+                {/* <p className="report-note">
+                  Bộ lọc cơ sở: {selectedCenters.length > 0 ? selectedCenters.join(", ") : "Tất cả cơ sở"}
+                </p>
+                <p className="report-note">
+                  Bộ lọc khối: {selectedBlocks.length > 0 ? selectedBlocks.join(", ") : "Tất cả khối"}
+                </p> */}
+              </div>
+            </div>
+
+            <div className="report-kpi-grid">
+              <article className="report-kpi-card">
+                <p>Tổng waiting (sheet tổng hợp)</p>
+                <strong>{waitingTotalCases}</strong>
+              </article>
+              <article className="report-kpi-card">
+                <p>Tổng case (sheet chi tiết)</p>
+                <strong>{waitingDetailTotalCases}</strong>
+              </article>
+              <article className="report-kpi-card">
+                <p>Tổng waiting (sheet chi tiết)</p>
+                <strong>{waitingDetailTotalWaitingCases}</strong>
+              </article>
+              <article className="report-kpi-card">
+                <p>Waiting rate tổng (sheet chi tiết)</p>
+                <strong>{waitingOverallRate}</strong>
+              </article>
+              <article className="report-kpi-card">
+                <p>Số cơ sở có dữ liệu</p>
+                <strong>{waitingCenterCount}</strong>
+              </article>
+            </div>
+
+            {waitingSummaryRows.length === 0 && waitingByCenterRows.length === 0 ? (
+              <div className="empty-state">
+                <p>Không có dữ liệu waiting từ 2 sheet.</p>
+              </div>
+            ) : (
+              <>
+                <section className="report-block">
+                  <h3>1) Biểu đồ nhanh</h3>
+                  <div className="waiting-chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.8rem" }}>
+                    <article className="waiting-chart-card">
+                      <h4>Top cơ sở theo waiting</h4>
+                      <p>So sánh số waiting giữa sheet tổng hợp và sheet chi tiết.</p>
+                      <div className="waiting-chart-legend">
+                        <span><i className="dot dot--detail" /> Chi tiết</span>
+                        <span><i className="dot dot--summary" /> Tổng hợp</span>
+                      </div>
+                      <div className="waiting-chart-body" style={{ display: "grid", gap: "0.46rem" }}>
+                        {waitingCenterChartRows.length === 0 ? (
+                          <p className="muted">Không có dữ liệu để vẽ biểu đồ.</p>
+                        ) : waitingCenterChartRows.map((row) => (
+                          <div className="waiting-chart-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) 2fr auto", alignItems: "center", gap: "0.5rem" }} key={`chart-center-${row.centerName}`}>
+                            <div className="waiting-chart-label" style={{ fontSize: "0.76rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.centerName}</div>
+                            <div className="waiting-chart-tracks" style={{ display: "grid", gap: "0.2rem" }}>
+                              <div className="waiting-chart-track" style={{ width: "100%", height: "8px", borderRadius: "999px", background: "#e6eff8", overflow: "hidden" }}>
+                                <span className="waiting-chart-bar waiting-chart-bar--detail" style={{ width: `${row.detailPercent}%`, display: "block", height: "100%", minWidth: "3px", borderRadius: "999px" }} />
+                              </div>
+                              <div className="waiting-chart-track waiting-chart-track--summary" style={{ width: "100%", height: "7px", borderRadius: "999px", background: "#eef3f9", overflow: "hidden" }}>
+                                <span className="waiting-chart-bar waiting-chart-bar--summary" style={{ width: `${row.summaryPercent}%`, display: "block", height: "100%", minWidth: "3px", borderRadius: "999px" }} />
+                              </div>
+                            </div>
+                            <div className="waiting-chart-values" style={{ display: "grid", justifyItems: "end", minWidth: "34px" }}>
+                              <strong>{row.detailWaitingCases}</strong>
+                              <span>{row.summaryWaitingCases}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+
+                    <article className="waiting-chart-card">
+                      <h4>Xu hướng waiting theo ngày</h4>
+                      <p>Hiển thị toàn bộ ngày có waiting case (theo dữ liệu chi tiết).</p>
+                      <div style={{ overflowX: "auto", paddingBottom: "6px" }}>
+                        <div
+                          className="waiting-date-chart"
+                          style={{
+                            minHeight: "190px",
+                            display: "grid",
+                            gridTemplateColumns: waitingDateChartRows.length > 0
+                              ? `repeat(${waitingDateChartRows.length}, minmax(42px, 1fr))`
+                              : "1fr",
+                            alignItems: "end",
+                            gap: "0.35rem",
+                            minWidth: waitingDateChartRows.length > 0 ? `${waitingDateChartRows.length * 46}px` : undefined,
+                          }}
+                        >
+                          {waitingDateChartRows.length === 0 ? (
+                            <p className="muted">Không có dữ liệu để vẽ biểu đồ.</p>
+                          ) : waitingDateChartRows.map((row) => (
+                            <div className="waiting-date-col" style={{ display: "grid", justifyItems: "center", gap: "0.2rem" }} key={`chart-date-${row.date}`}>
+                              <div className="waiting-date-col-bar-wrap" style={{ width: "100%", height: "130px", borderRadius: "8px 8px 6px 6px", background: "#edf3fa", display: "flex", alignItems: "flex-end", justifyContent: "center", overflow: "hidden", padding: "0 2px" }}>
+                                <span className="waiting-date-col-bar" style={{ height: `${Math.max(row.percent, 6)}%`, width: "100%", display: "block", borderRadius: "6px 6px 3px 3px" }} />
+                              </div>
+                              <strong>{displayCount(row.waitingCases)}</strong>
+                              <span>{row.date}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </article>
+                  </div>
+                </section>
+
+                <section className="report-block">
+                  <h3>2) Đối soát theo cơ sở (sheet tổng hợp vs sheet chi tiết)</h3>
+                  <div className="table-wrap">
+                    <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-center")}> 
+                      {renderTableColGroup("waiting-center", 8)}
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Cơ sở</th>
+                          <th>Waiting tổng hợp</th>
+                          <th>Rate tổng hợp</th>
+                          <th>Waiting chi tiết</th>
+                          <th>Total chi tiết</th>
+                          <th>Rate chi tiết</th>
+                          <th>Chênh lệch (chi tiết - tổng hợp)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {waitingByCenterRows.map((row, index) => (
+                          <tr key={`${row.centerName}-${index}`}>
+                            <td>{index + 1}</td>
+                            <td>{row.centerName}</td>
+                            <td
+                              className={row.summaryWaitingCases > 0
+                                ? `${waitingToneClass(row.summaryWaitingCases, waitingCenterMax)} waiting-matrix-hit`
+                                : waitingToneClass(row.summaryWaitingCases, waitingCenterMax)}
+                            >
+                              {row.summaryWaitingCases}
+                            </td>
+                            <td
+                              className={parsePercentValue(row.summaryWaitingRate) > 0
+                                ? `${waitingToneClass(parsePercentValue(row.summaryWaitingRate), 100)} waiting-matrix-hit`
+                                : waitingToneClass(parsePercentValue(row.summaryWaitingRate), 100)}
+                            >
+                              {row.summaryWaitingRate}
+                            </td>
+                            <td
+                              className={row.detailWaitingCases > 0
+                                ? `${waitingToneClass(row.detailWaitingCases, waitingCenterMax)} waiting-matrix-hit`
+                                : waitingToneClass(row.detailWaitingCases, waitingCenterMax)}
+                            >
+                              {row.detailWaitingCases}
+                            </td>
+                            <td>{row.detailTotalCases}</td>
+                            <td
+                              className={parsePercentValue(row.detailWaitingRate) > 0
+                                ? `${waitingToneClass(parsePercentValue(row.detailWaitingRate), 100)} waiting-matrix-hit`
+                                : waitingToneClass(parsePercentValue(row.detailWaitingRate), 100)}
+                            >
+                              {row.detailWaitingRate}
+                            </td>
+                            <td className={row.deltaCases !== 0 ? "conflict-cell waiting-delta-cell" : "waiting-delta-cell"}>{row.deltaCases}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="report-block">
+                  <h3>3) Waiting theo course line</h3>
+                  <div className="waiting-chart-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.8rem" }}>
+                    <article className="waiting-chart-card">
+                      <h4>Heatmap waiting theo course line x cơ sở</h4>
+                      <p>Màu ô đậm hơn tương ứng số waiting cao hơn trong cùng cụm dữ liệu.</p>
+                      <div className="table-wrap" style={{ marginTop: "0.4rem" }}>
+                        {waitingCourseHeatmapRows.length === 0 ? (
+                          <p className="muted">Không có dữ liệu course line để hiển thị heatmap.</p>
+                        ) : (
+                          <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-heatmap")} style={{ minWidth: `${Math.max(860, waitingCenterColumns.length * 120 + 240)}px` }}>
+                            {renderTableColGroup("waiting-heatmap", waitingCenterColumns.length + 2)}
+                            <thead>
+                              <tr>
+                                <th>Course line</th>
+                                {waitingCenterColumns.map((centerName) => (
+                                  <th key={`waiting-heatmap-head-${centerName}`}>{centerName}</th>
+                                ))}
+                                <th>Tổng</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {waitingCourseHeatmapRows.map((row) => (
+                                <tr key={`waiting-heatmap-row-${row.courseLine}`}>
+                                  <td><strong>{row.courseLine}</strong></td>
+                                  {row.cells.map((cell) => (
+                                    <td
+                                      key={`waiting-heatmap-cell-${row.courseLine}-${cell.centerName}`}
+                                      className={[
+                                        cell.value > 0 ? `${waitingToneClass(cell.value, waitingCourseCellMax)} waiting-matrix-hit` : waitingToneClass(cell.value, waitingCourseCellMax),
+                                        cell.value > 0 && (isUnknownLabel(row.courseLine) || isUnknownLabel(cell.centerName)) ? "unknown-emphasis-soft" : "",
+                                      ].filter(Boolean).join(" ")}
+                                    >
+                                      {displayCount(cell.value)}
+                                    </td>
+                                  ))}
+                                  <td
+                                    className={[
+                                      waitingToneClass(row.total, waitingCourseMax),
+                                      row.total > 0 && isUnknownLabel(row.courseLine) ? "unknown-emphasis-soft" : "",
+                                    ].filter(Boolean).join(" ")}
+                                  >
+                                    <strong>{displayCount(row.total)}</strong>
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr className="waiting-heatmap-total-row">
+                                <td><strong>Tổng theo cơ sở</strong></td>
+                                {waitingCenterColumns.map((centerName) => {
+                                  const value = waitingHeatmapCenterTotals.totals[centerName] ?? 0;
+                                  return (
+                                    <td key={`waiting-heatmap-total-${centerName}`} className="waiting-heatmap-total-cell">
+                                      <strong>{displayCount(value)}</strong>
+                                    </td>
+                                  );
+                                })}
+                                <td className="waiting-heatmap-total-cell">
+                                  <strong>{displayCount(waitingHeatmapCenterTotals.grandTotal)}</strong>
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    </article>
+                  </div>
+                </section>
+
+                <section className="report-block">
+                  <h3>4) Waiting theo ngày</h3>
+                  <div className="table-wrap">
+                    <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "waiting-date")}> 
+                      {renderTableColGroup("waiting-date", waitingCenterColumns.length + 2)}
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Ngày</th>
+                          {waitingCenterColumns.map((centerName) => (
+                            <th key={`waiting-day-head-${centerName}`}>{centerName}</th>
+                          ))}
+                          <th>Tổng ngày</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {waitingByDateCenterRows.map((row, index) => (
+                          <tr key={`${row.date}-${index}`}>
+                            <td>{index + 1}</td>
+                            <td>{row.date}</td>
+                            {waitingCenterColumns.map((centerName) => (
+                              (() => {
+                                const value = row.counts[centerName] ?? 0;
+                                const toneClass = waitingToneClass(value, waitingCenterMax);
+                                return (
+                                  <td
+                                    key={`waiting-day-cell-${row.date}-${centerName}`}
+                                    className={[
+                                      value > 0 ? `${toneClass} waiting-matrix-hit` : toneClass,
+                                      value > 0 && (isUnknownLabel(centerName) || isUnknownLabel(row.date)) ? "unknown-emphasis-soft" : "",
+                                    ].filter(Boolean).join(" ")}
+                                  >
+                                    {displayCount(value)}
+                                  </td>
+                                );
+                              })()
+                            ))}
+                            <td className={waitingToneClass(row.total, waitingDayTotalMax)}><strong>{displayCount(row.total)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </>
+            )}
           </section>
         )}
       </main>

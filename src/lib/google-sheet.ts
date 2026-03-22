@@ -1,5 +1,19 @@
 import Papa from "papaparse";
-import { BASE_WEEKLY_SLOTS, TeacherScheduleRow, WEEKDAYS, WeekdayLabel, WeeklySlot } from "@/types/schedule";
+import {
+  BASE_WEEKLY_SLOTS,
+  TeacherScheduleRow,
+  WaitingCaseByCenter,
+  WaitingCaseByCourseLineSummary,
+  WaitingDetailCase,
+  WaitingDetailByCourseLine,
+  WaitingDetailByDate,
+  WaitingDetailByType,
+  WaitingDetailCenterRow,
+  WaitingDetailReport,
+  WEEKDAYS,
+  WeekdayLabel,
+  WeeklySlot,
+} from "@/types/schedule";
 
 type RawRow = Record<string, string | number | null | undefined>;
 
@@ -331,6 +345,453 @@ function parseCsvRows(csvContent: string): RawRow[] {
   }
 
   return parsed.data;
+}
+
+function parseCsvTable(csvContent: string): string[][] {
+  const parsed = Papa.parse<string[]>(csvContent, {
+    header: false,
+    skipEmptyLines: true,
+  });
+
+  if (parsed.errors.length > 0) {
+    throw new Error(`CSV parse error: ${parsed.errors[0].message}`);
+  }
+
+  return parsed.data.map((row) => row.map((cell) => normalizeText(cell)));
+}
+
+function buildWaitingSheetCsvUrl(): string {
+  const directCsvUrl = process.env.WAITING_CASES_SHEET_CSV_URL;
+  if (directCsvUrl) {
+    return directCsvUrl;
+  }
+
+  const defaultSheetId = "172bbDGAsMswfTOPuPDEeUFuXcOhWPxAf8XjRVWDaz5k";
+  const sheetId = process.env.WAITING_CASES_SHEET_ID ?? defaultSheetId;
+  const gid = process.env.WAITING_CASES_SHEET_GID ?? "1122383044";
+  return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+}
+
+function isWaitingStatus(rawStatus: string): boolean {
+  const statusToken = normalizeKey(rawStatus);
+  return statusToken === "wating" || statusToken === "waiting";
+}
+
+function normalizeWaitingRate(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  if (!trimmed || trimmed === "#DIV/0!") {
+    return "-";
+  }
+
+  const numericOnly = trimmed.replace(/[^0-9.]/g, "");
+  if (!numericOnly) {
+    return "-";
+  }
+
+  const parsed = Number(numericOnly);
+  if (Number.isNaN(parsed)) {
+    return "-";
+  }
+
+  return `${parsed.toFixed(2)}%`;
+}
+
+function formatPercent(numerator: number, denominator: number): string {
+  if (denominator <= 0) {
+    return "-";
+  }
+
+  return `${((numerator / denominator) * 100).toFixed(2)}%`;
+}
+
+function buildWaitingDetailSheetCsvUrl(): string {
+  const directCsvUrl = process.env.WAITING_CASES_DETAIL_SHEET_CSV_URL;
+  if (directCsvUrl) {
+    return directCsvUrl;
+  }
+
+  const defaultSheetId = "1MZMHXsmP4v8GBwBKpb0Hj-DYzonSBWA1iG5KXkVYBB4";
+  const sheetId = process.env.WAITING_CASES_DETAIL_SHEET_ID ?? defaultSheetId;
+  const gid = process.env.WAITING_CASES_DETAIL_SHEET_GID ?? "1227175209";
+  return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+}
+
+function normalizeOutcomeStatus(rawValue: string): string {
+  const token = normalizeKey(rawValue).toUpperCase();
+  if (token === "WATING" || token === "WAITING") return "WAITING";
+  if (token === "PASSED") return "PASSED";
+  if (token === "CANCELED") return "CANCELED";
+  if (token === "ABANDONED") return "ABANDONED";
+  return "";
+}
+
+function normalizeDetailCondition(rawValue: string): string {
+  const token = normalizeKey(rawValue).toUpperCase();
+  if (token === "APPROVED" || token === "APPROVE") return "APPROVED";
+  if (token === "CONFIRMED" || token === "CONFIRM") return "CONFIRMED";
+  if (token === "PENDING") return "PENDING";
+  return "";
+}
+
+function extractDetailCondition(row: RawRow): string {
+  const direct = pickValueOrdered(row, [
+    "condition",
+    "appointment_condition",
+    "lead_condition",
+    "booking_condition",
+    "status",
+    "lead_status",
+    "booking_status",
+    "state",
+    "trang thai",
+    "tinh trang",
+  ]);
+
+  const directNormalized = normalizeDetailCondition(direct);
+  if (directNormalized) {
+    return directNormalized;
+  }
+
+  for (const value of Object.values(row)) {
+    const normalized = normalizeDetailCondition(normalizeText(value));
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function extractOutcomeStatus(row: RawRow): string {
+  // Source sheet can contain both ABANDONED/PASSED in one column and WAITING in another.
+  // For waiting analytics, prioritize WAITING when it appears anywhere in the row.
+  for (const value of Object.values(row)) {
+    const normalized = normalizeOutcomeStatus(normalizeText(value));
+    if (normalized === "WAITING") {
+      return "WAITING";
+    }
+  }
+
+  const direct = pickValueOrdered(row, [
+    "appointment_result",
+    "appointment_status",
+    "waiting_status",
+    "appointment_note",
+    "result",
+  ]);
+  const directNormalized = normalizeOutcomeStatus(direct);
+  if (directNormalized) {
+    return directNormalized;
+  }
+
+  for (const value of Object.values(row)) {
+    const normalized = normalizeOutcomeStatus(normalizeText(value));
+    if (normalized && normalized !== "WAITING") {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function dateSortKey(dateText: string): number {
+  const trimmed = dateText.trim();
+  const match = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  return year * 10000 + month * 100 + day;
+}
+
+export async function getWaitingDetailReport(summaryByCenter: WaitingCaseByCenter[]): Promise<WaitingDetailReport> {
+  const response = await fetch(buildWaitingDetailSheetCsvUrl(), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Unable to fetch waiting detail CSV: ${response.status}`);
+  }
+
+  const rows = parseCsvRows(await response.text());
+  const centerCounter = new Map<string, { waiting: number; total: number }>();
+  const typeCounter = new Map<string, { waiting: number; total: number }>();
+  const courseLineCounter = new Map<string, number>();
+  const dateCounter = new Map<string, number>();
+  const cases: WaitingDetailCase[] = [];
+
+  let totalCases = 0;
+  let totalWaitingCases = 0;
+
+  for (const row of rows) {
+    const detailCondition = extractDetailCondition(row);
+    if (!["APPROVED", "CONFIRMED", "PENDING"].includes(detailCondition)) {
+      continue;
+    }
+
+    const statusesInRow = Object.values(row)
+      .map((value) => normalizeOutcomeStatus(normalizeText(value)))
+      .filter(Boolean);
+
+    // ABANDONED is explicitly excluded from all waiting analytics.
+    if (statusesInRow.includes("ABANDONED")) {
+      continue;
+    }
+
+    const centerName = pickValueOrdered(row, ["centre_name", "centre", "center_name", "campus", "branch", "co so"]);
+    if (!centerName) {
+      continue;
+    }
+
+    const type = pickValueOrdered(row, ["type"]) || "Khong ro";
+    const courseLineRaw = pickValueOrdered(row, ["courseLines", "course_line", "course_lines"]) || "Khong ro";
+    const courseLines = courseLineRaw
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const date = pickValueOrdered(row, ["date", "session_date", "ngay"]) || "Khong ro";
+    const outcomeStatus = extractOutcomeStatus(row);
+
+    cases.push({
+      centerName,
+      type,
+      courseLines,
+      date,
+      outcomeStatus,
+    });
+
+    totalCases += 1;
+
+    if (!centerCounter.has(centerName)) centerCounter.set(centerName, { waiting: 0, total: 0 });
+    if (!typeCounter.has(type)) typeCounter.set(type, { waiting: 0, total: 0 });
+
+    centerCounter.get(centerName)!.total += 1;
+    typeCounter.get(type)!.total += 1;
+
+    if (outcomeStatus === "WAITING") {
+      totalWaitingCases += 1;
+      centerCounter.get(centerName)!.waiting += 1;
+      typeCounter.get(type)!.waiting += 1;
+      dateCounter.set(date, (dateCounter.get(date) ?? 0) + 1);
+
+      if (courseLines.length === 0) {
+        courseLineCounter.set("Khong ro", (courseLineCounter.get("Khong ro") ?? 0) + 1);
+      } else {
+        for (const courseLine of courseLines) {
+          courseLineCounter.set(courseLine, (courseLineCounter.get(courseLine) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  const summaryByCenterMap = new Map(summaryByCenter.map((item) => [item.centerName, item]));
+  const centerNames = new Set<string>([
+    ...Array.from(centerCounter.keys()),
+    ...Array.from(summaryByCenterMap.keys()),
+  ]);
+
+  const byCenter: WaitingDetailCenterRow[] = Array.from(centerNames).map((centerName) => {
+    const detail = centerCounter.get(centerName) ?? { waiting: 0, total: 0 };
+    const summary = summaryByCenterMap.get(centerName);
+    const summaryWaitingCases = summary?.waitingCaseCount ?? 0;
+    return {
+      centerName,
+      detailWaitingCases: detail.waiting,
+      detailTotalCases: detail.total,
+      detailWaitingRate: formatPercent(detail.waiting, detail.total),
+      summaryWaitingCases,
+      summaryWaitingRate: summary?.waitingRate ?? "-",
+      deltaCases: detail.waiting - summaryWaitingCases,
+    };
+  }).sort((a, b) => b.detailWaitingCases - a.detailWaitingCases || a.centerName.localeCompare(b.centerName));
+
+  const byType: WaitingDetailByType[] = Array.from(typeCounter.entries())
+    .map(([type, counter]) => ({
+      type,
+      waitingCases: counter.waiting,
+      totalCases: counter.total,
+      waitingRate: formatPercent(counter.waiting, counter.total),
+    }))
+    .sort((a, b) => b.waitingCases - a.waitingCases || a.type.localeCompare(b.type));
+
+  const byCourseLine: WaitingDetailByCourseLine[] = Array.from(courseLineCounter.entries())
+    .map(([courseLine, waitingCases]) => ({ courseLine, waitingCases }))
+    .sort((a, b) => b.waitingCases - a.waitingCases || a.courseLine.localeCompare(b.courseLine));
+
+  const byDate: WaitingDetailByDate[] = Array.from(dateCounter.entries())
+    .map(([date, waitingCases]) => ({ date, waitingCases }))
+    .sort((a, b) => dateSortKey(a.date) - dateSortKey(b.date));
+
+  return {
+    totalCases,
+    totalWaitingCases,
+    overallWaitingRate: formatPercent(totalWaitingCases, totalCases),
+    centerCount: byCenter.filter((row) => row.detailWaitingCases > 0 || row.summaryWaitingCases > 0).length,
+    cases,
+    byCenter,
+    byType,
+    byCourseLine,
+    byDate,
+  };
+}
+
+export async function getWaitingCasesByCenter(): Promise<WaitingCaseByCenter[]> {
+  const response = await fetch(buildWaitingSheetCsvUrl(), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Unable to fetch waiting cases CSV: ${response.status}`);
+  }
+
+  const csvContent = await response.text();
+  const rows = parseCsvRows(csvContent);
+  const caseCountByCenter = new Map<string, number>();
+  const waitingRateByCenter = new Map<string, string>();
+
+  // Format A: detailed rows, each row has status and center.
+  for (const row of rows) {
+    const status = pickValue(row, ["status", "trang thai", "state", "tinh trang"]);
+    if (!isWaitingStatus(status)) {
+      continue;
+    }
+
+    const centerName =
+      pickValueOrdered(row, ["centre", "centre name", "centre_name", "co so", "campus", "branch", "bu"]) ||
+      "Chưa rõ cơ sở";
+    caseCountByCenter.set(centerName, (caseCountByCenter.get(centerName) ?? 0) + 1);
+    if (!waitingRateByCenter.has(centerName)) {
+      waitingRateByCenter.set(centerName, "-");
+    }
+  }
+
+  // Format B: aggregated rows with columns like centre_name + WAITING Cases.
+  if (caseCountByCenter.size === 0) {
+    const table = parseCsvTable(csvContent);
+    const headerIndex = table.findIndex((row) => {
+      const normalizedCells = row.map((cell) => normalizeKey(cell));
+      return normalizedCells.includes("centrename") && normalizedCells.includes("waitingcases");
+    });
+
+    if (headerIndex >= 0) {
+      const headerRow = table[headerIndex].map((cell) => normalizeKey(cell));
+      const centerColIndex = headerRow.findIndex((key) => key === "centrename" || key === "centre");
+      const waitingColIndex = headerRow.findIndex((key) => key === "waitingcases" || key === "waiting");
+      const waitingRateColIndex = headerRow.findIndex((key) => key === "waitingrate");
+
+      if (centerColIndex >= 0 && waitingColIndex >= 0) {
+        for (let i = headerIndex + 1; i < table.length; i += 1) {
+          const currentRow = table[i];
+          const centerName = normalizeText(currentRow[centerColIndex]);
+          const waitingCasesRaw = normalizeText(currentRow[waitingColIndex]);
+          const waitingRateRaw = waitingRateColIndex >= 0 ? normalizeText(currentRow[waitingRateColIndex]) : "";
+
+          if (!centerName) {
+            continue;
+          }
+
+          if (normalizeKey(centerName).includes("grandtotal")) {
+            break;
+          }
+
+          const waitingCount = parseStudentCount(waitingCasesRaw);
+          caseCountByCenter.set(centerName, waitingCount);
+          waitingRateByCenter.set(centerName, normalizeWaitingRate(waitingRateRaw));
+        }
+      }
+    }
+  }
+
+  // Final fallback: read whatever shape has recognizable columns.
+  if (caseCountByCenter.size === 0) {
+    for (const row of rows) {
+      const centerName = pickValueOrdered(row, ["centre_name", "centre", "center_name", "co so", "campus", "branch", "bu"]);
+      if (!centerName || normalizeKey(centerName).includes("grandtotal")) {
+        continue;
+      }
+      const waitingCasesRaw = pickValueOrdered(row, ["waiting cases", "waiting_case", "waiting cases total", "waiting"]);
+      const waitingRateRaw = pickValueOrdered(row, ["waiting rate", "waiting_rate", "rate"]);
+      const waitingCount = parseStudentCount(waitingCasesRaw);
+      caseCountByCenter.set(centerName, waitingCount);
+      waitingRateByCenter.set(centerName, normalizeWaitingRate(waitingRateRaw));
+    }
+  }
+
+  return Array.from(caseCountByCenter.entries())
+    .filter(([, waitingCaseCount]) => waitingCaseCount > 0)
+    .map(([centerName, waitingCaseCount]) => ({
+      centerName,
+      waitingCaseCount,
+      waitingRate: waitingRateByCenter.get(centerName) ?? "-",
+    }))
+    .sort((a, b) => b.waitingCaseCount - a.waitingCaseCount || a.centerName.localeCompare(b.centerName));
+}
+
+export async function getWaitingCasesByCourseLineSummary(): Promise<WaitingCaseByCourseLineSummary[]> {
+  const response = await fetch(buildWaitingSheetCsvUrl(), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Unable to fetch waiting cases CSV: ${response.status}`);
+  }
+
+  const table = parseCsvTable(await response.text());
+  const headerIndex = table.findIndex((row) => {
+    const normalizedCells = row.map((cell) => normalizeKey(cell));
+    return normalizedCells.includes("courselines") && normalizedCells.some((cell) => cell.includes("hcm") || cell.includes("centre") || cell.includes("center"));
+  });
+
+  if (headerIndex < 0) {
+    return [];
+  }
+
+  const headerRow = table[headerIndex];
+  const normalizedHeader = headerRow.map((cell) => normalizeKey(cell));
+  const courseLineColIndex = normalizedHeader.findIndex((key) => key === "courselines" || key === "courseline" || key === "courselines");
+  if (courseLineColIndex < 0) {
+    return [];
+  }
+
+  const centerColumns: Array<{ index: number; centerName: string }> = [];
+  for (let index = courseLineColIndex + 1; index < headerRow.length; index += 1) {
+    const centerName = normalizeText(headerRow[index]);
+    if (!centerName) continue;
+
+    const normalized = normalizeKey(centerName);
+    if (normalized === "total" || normalized === "grandtotal") continue;
+    centerColumns.push({ index, centerName });
+  }
+
+  if (centerColumns.length === 0) {
+    return [];
+  }
+
+  const rows: WaitingCaseByCourseLineSummary[] = [];
+  for (let i = headerIndex + 1; i < table.length; i += 1) {
+    const currentRow = table[i];
+    const courseLinesRaw = normalizeText(currentRow[courseLineColIndex]);
+    if (normalizeKey(courseLinesRaw).includes("grandtotal")) {
+      break;
+    }
+
+    const centerCounts: Record<string, number> = {};
+    let totalCases = 0;
+    let hasData = false;
+
+    for (const column of centerColumns) {
+      const count = parseStudentCount(normalizeText(currentRow[column.index]));
+      centerCounts[column.centerName] = count;
+      totalCases += count;
+      if (count > 0) hasData = true;
+    }
+
+    if (!hasData) {
+      continue;
+    }
+
+    rows.push({
+      courseLines: courseLinesRaw || "Khong ro",
+      centerCounts,
+      totalCases,
+    });
+  }
+
+  return rows.sort((a, b) => b.totalCases - a.totalCases || a.courseLines.localeCompare(b.courseLines));
 }
 
 async function fetchStudentCountMap(): Promise<Map<string, number>> {
