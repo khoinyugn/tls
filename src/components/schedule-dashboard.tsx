@@ -35,6 +35,16 @@ const INTENSITY_RANK: Record<string, number> = { Thấp: 1, "Trung bình": 2, Ca
 const DISPATCH_RANK: Record<string, number> = { "Tập trung": 1, "Trung bình": 2, Rộng: 3 };
 const WORKLOAD_RANK: Record<string, number> = { Nhẹ: 1, Vừa: 2, Nặng: 3 };
 const CLASS_SIZE_RANK: Record<string, number> = { "Lớp nhỏ": 1, "Lớp trung bình": 2, "Lớp đông": 3 };
+const REPORT_CENTER_BAR_COLORS = [
+  "#1f6fd2",
+  "#de8a00",
+  "#2a9d55",
+  "#d34779",
+  "#6a4c93",
+  "#00838f",
+  "#b83b1f",
+  "#4a6572",
+];
 
 type ClassDomain = "coding" | "robotics" | "art" | "default";
 type BlockFilter = "coding" | "robotics" | "art";
@@ -208,6 +218,7 @@ export default function ScheduleDashboard({
   const [classTeacherSearch, setClassTeacherSearch] = useState("");
   const [classDateFrom, setClassDateFrom] = useState("");
   const [classDateTo, setClassDateTo] = useState("");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [freeModal, setFreeModal] = useState<{ freeKey: string; domain: string; slot: string; day: string; centre: string } | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<TeacherScheduleRow | null>(null);
 
@@ -812,6 +823,49 @@ export default function ScheduleDashboard({
     return rows;
   }, [reportData.teacherRows, teacherSort]);
 
+  const reportWeekdayChart = useMemo(() => {
+    let rows = activeWeekKey ? filteredRows.filter((row) => row.weekKey === activeWeekKey) : filteredRows;
+    if (selectedSlots.length > 0) {
+      rows = rows.filter((row) => selectedSlots.includes(row.fixedSlotLabel));
+    }
+
+    const centers = Array.from(
+      new Set(rows.map((row) => row.centerName?.trim()).filter(Boolean)),
+    ) as string[];
+    centers.sort((a, b) => a.localeCompare(b));
+
+    const byWeekday = WEEKDAYS.map((weekday) => {
+      const classSetByCenter = new Map<string, Set<string>>();
+      centers.forEach((center) => classSetByCenter.set(center, new Set<string>()));
+
+      for (const row of rows) {
+        if (row.weekday !== weekday) continue;
+        const centerName = row.centerName?.trim();
+        if (!centerName || !classSetByCenter.has(centerName)) continue;
+        const classKey = row.className?.trim();
+        if (!classKey) continue;
+        classSetByCenter.get(centerName)!.add(classKey);
+      }
+
+      const centerCounts: Record<string, number> = {};
+      let totalClasses = 0;
+      for (const center of centers) {
+        const value = classSetByCenter.get(center)?.size ?? 0;
+        centerCounts[center] = value;
+        totalClasses += value;
+      }
+
+      return { weekday, centerCounts, totalClasses };
+    });
+
+    const maxValue = Math.max(
+      ...byWeekday.flatMap((row) => centers.map((center) => row.centerCounts[center] ?? 0)),
+      0,
+    );
+
+    return { centers, byWeekday, maxValue };
+  }, [filteredRows, activeWeekKey, selectedSlots]);
+
   const waitingSummaryBaseRows = useMemo(() => {
     const effectiveSelectedBlocks = getEffectiveWaitingBlocks(selectedBlocks);
     if (effectiveSelectedBlocks.size === 0) {
@@ -866,26 +920,6 @@ export default function ScheduleDashboard({
 
     return rows;
   }, [waitingDetailReport.cases, selectedCenters, selectedBlocks]);
-
-  const waitingBlockTotals = useMemo(() => {
-    const totals: Record<BlockFilter, number> = { coding: 0, robotics: 0, art: 0 };
-
-    for (const row of waitingCasesByCourseLineSummary) {
-      const blocks = getBlocksFromCourseLineValue(row.courseLines);
-      if (blocks.length === 0) continue;
-
-      const rowTotal = selectedCenters.length > 0
-        ? selectedCenters.reduce((sum, centerName) => sum + (row.centerCounts[centerName] ?? 0), 0)
-        : Object.values(row.centerCounts).reduce((sum, value) => sum + value, 0);
-
-      if (rowTotal <= 0) continue;
-      for (const block of blocks) {
-        totals[block] += rowTotal;
-      }
-    }
-
-    return totals;
-  }, [waitingCasesByCourseLineSummary, selectedCenters]);
 
   const waitingTotalCases = useMemo(
     () => waitingSummaryRows.reduce((sum, item) => sum + item.waitingCaseCount, 0),
@@ -1103,7 +1137,6 @@ export default function ScheduleDashboard({
   const waitingOverallRate = percentText(waitingDetailTotalWaitingCases, waitingDetailTotalCases);
   const waitingCenterCount = waitingByCenterRows.filter((row) => row.detailWaitingCases > 0 || row.summaryWaitingCases > 0).length;
   const waitingCenterMax = Math.max(...waitingByCenterRows.map((row) => row.detailWaitingCases), 0);
-  const waitingTypeMax = Math.max(...waitingByTypeRows.map((row) => row.waitingCases), 0);
   const waitingCourseMax = Math.max(...waitingByCourseRows.map((row) => row.waitingCases), 0);
   const waitingDayTotalMax = Math.max(...waitingByDateCenterRows.map((row) => row.total), 0);
 
@@ -1140,7 +1173,7 @@ export default function ScheduleDashboard({
   }, [waitingByTypeRows]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${isSidebarCollapsed ? " app-shell--sidebar-collapsed" : ""}`}>
       {/* ── SIDEBAR ── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
@@ -1159,7 +1192,7 @@ export default function ScheduleDashboard({
 
         <div className="sidebar-scroll">
 
-        <div className="sync-bar">
+        {!isSidebarCollapsed && <div className="sync-bar">
           <div className="sync-info">
             <span className={`sync-dot${isRefreshing ? " sync-dot--spinning" : ""}`} />
             <span className="sync-time">
@@ -1185,9 +1218,9 @@ export default function ScheduleDashboard({
             </svg>
           </button>
           {refreshError && <p className="sync-error">{refreshError}</p>}
-        </div>
+        </div>}
 
-        <div className="sidebar-stats sidebar-stats--top sidebar-section">
+        {!isSidebarCollapsed && <div className="sidebar-stats sidebar-stats--top sidebar-section">
           <div className="stat-card">
             <span className="stat-value">{sidebarKpis.classCount}</span>
             <span className="stat-label">Lớp</span>
@@ -1200,9 +1233,9 @@ export default function ScheduleDashboard({
             <span className="stat-value">{sidebarKpis.buCount}</span>
             <span className="stat-label">BU</span>
           </div>
-        </div>
+        </div>}
 
-        {activeModule === "waiting" && (
+        {!isSidebarCollapsed && activeModule === "waiting" && (
           <div className="sidebar-section waiting-type-sidebar">
             {waitingTypeSidebarRows.length === 0 ? (
               <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.75rem" }}>Không có dữ liệu</p>
@@ -1223,20 +1256,22 @@ export default function ScheduleDashboard({
         )}
 
         <nav className="sidebar-nav sidebar-section">
-          <p className="nav-section-label">Modules</p>
+          {!isSidebarCollapsed && <p className="nav-section-label">Modules</p>}
           <button
             className={`nav-item${activeModule === "weekly" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("weekly")}
+            title="Lịch theo tuần"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" />
               <path d="M3 10h18M8 2v4M16 2v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-            <span>Lịch theo tuần</span>
+            {!isSidebarCollapsed && <span>Lịch theo tuần</span>}
           </button>
           <button
             className={`nav-item${activeModule === "classes" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("classes")}
+            title="Danh sách lớp"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <path
@@ -1246,30 +1281,32 @@ export default function ScheduleDashboard({
                 strokeLinecap="round"
               />
             </svg>
-            <span>Danh sách lớp</span>
+            {!isSidebarCollapsed && <span>Danh sách lớp</span>}
           </button>
           <button
             className={`nav-item${activeModule === "report" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("report")}
+            title="Report phân tích"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <path d="M4 19h16M7 16V9m5 7V5m5 11v-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-            <span>Report phân tích</span>
+            {!isSidebarCollapsed && <span>Report phân tích</span>}
           </button>
           <button
             className={`nav-item${activeModule === "waiting" ? " nav-item--active" : ""}`}
             onClick={() => setActiveModule("waiting")}
+            title="OH Report"
           >
             <svg className="nav-icon" viewBox="0 0 24 24" fill="none">
               <path d="M12 8v5l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
             </svg>
-            <span>OH Report</span>
+            {!isSidebarCollapsed && <span>OH Report</span>}
           </button>
         </nav>
 
-        {activeModule === "weekly" && (
+        {!isSidebarCollapsed && activeModule === "weekly" && (
           <div className="sidebar-search sidebar-section">
             <p className="nav-section-label">Tìm kiếm</p>
             <div className="control-group control-group--search">
@@ -1285,7 +1322,7 @@ export default function ScheduleDashboard({
           </div>
         )}
 
-        {activeModule === "classes" && (
+        {!isSidebarCollapsed && activeModule === "classes" && (
           <div className="sidebar-search sidebar-section">
             <p className="nav-section-label">Tìm kiếm</p>
             <div className="control-group control-group--search">
@@ -1336,7 +1373,7 @@ export default function ScheduleDashboard({
           </div>
         )}
 
-        <div className="sidebar-controls sidebar-section">
+        {!isSidebarCollapsed && <div className="sidebar-controls sidebar-section">
           <p className="nav-section-label">Bộ lọc</p>
 
           <div className="control-group">
@@ -1448,9 +1485,20 @@ export default function ScheduleDashboard({
           )}
 
 
+        </div>}
+
+        {!isSidebarCollapsed && <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>}
         </div>
 
-        <footer className="sidebar-footer">Copyright © HCM1&4. All rights reserved.</footer>
+        <div className="sidebar-collapse-dock">
+          <button
+            className="sidebar-collapse-btn"
+            onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+            title={isSidebarCollapsed ? "Mở rộng sidebar" : "Thu nhỏ sidebar"}
+            aria-label={isSidebarCollapsed ? "Mở rộng sidebar" : "Thu nhỏ sidebar"}
+          >
+            {isSidebarCollapsed ? "→" : "←"}
+          </button>
         </div>
       </aside>
 
@@ -1778,6 +1826,68 @@ export default function ScheduleDashboard({
                 <strong>{reportData.totalTeachers}</strong>
               </article>
             </div>
+
+            <section className="report-block">
+              <h3>Biểu đồ cột phân bổ số lượng lớp theo thứ trong tuần</h3>
+
+              {reportWeekdayChart.centers.length === 0 ? (
+                <div className="empty-state">
+                  <p>Không có dữ liệu để hiển thị biểu đồ.</p>
+                </div>
+              ) : (
+                <div className="report-weekday-chart-card">
+                  <div className="report-weekday-legend">
+                    {reportWeekdayChart.centers.map((centerName, centerIndex) => (
+                      <span key={`weekday-legend-${centerName}`}>
+                        <i
+                          style={{ backgroundColor: REPORT_CENTER_BAR_COLORS[centerIndex % REPORT_CENTER_BAR_COLORS.length] }}
+                        />
+                        {centerName}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="report-weekday-chart-scroll">
+                    <div
+                      className="report-weekday-groups"
+                      style={{ minWidth: `${Math.max(680, reportWeekdayChart.byWeekday.length * 170)}px` }}
+                    >
+                      {reportWeekdayChart.byWeekday.map((weekdayRow) => (
+                        <section key={`weekday-group-${weekdayRow.weekday}`} className="report-weekday-group">
+                          <p className="report-weekday-title">{weekdayRow.weekday}</p>
+                          <p className="report-weekday-subtotal">Tổng: {weekdayRow.totalClasses} lớp</p>
+
+                          <div className="report-weekday-bars">
+                            {reportWeekdayChart.centers.map((centerName, centerIndex) => {
+                              const value = weekdayRow.centerCounts[centerName] ?? 0;
+                              const heightPercent = reportWeekdayChart.maxValue > 0
+                                ? (value / reportWeekdayChart.maxValue) * 100
+                                : 0;
+
+                              return (
+                                <div key={`weekday-bar-${weekdayRow.weekday}-${centerName}`} className="report-weekday-bar-col">
+                                  <div className="report-weekday-bar-track">
+                                    <span
+                                      className="report-weekday-bar-fill"
+                                      style={{
+                                        height: `${Math.max(heightPercent, value > 0 ? 8 : 0)}%`,
+                                        backgroundColor: REPORT_CENTER_BAR_COLORS[centerIndex % REPORT_CENTER_BAR_COLORS.length],
+                                      }}
+                                    >
+                                      {value > 0 ? <span className="report-weekday-bar-value">{value}</span> : null}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
 
             <section className="report-block">
               <h3>1) Phân tích thời gian lớp</h3>
