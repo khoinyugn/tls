@@ -1954,7 +1954,7 @@ export default function ScheduleDashboard({
               <h3>2) Phạm vi điều phối phân bổ giáo viên</h3>
               <div className="table-wrap">
                 <table className="resizable-table" onMouseDown={(event) => handleTableMouseDown(event, "report-teacher")}> 
-                  {renderTableColGroup("report-teacher", 13)}
+                  {renderTableColGroup("report-teacher", 9)}
                   <thead>
                     <tr>
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("teacherName")}>Giáo viên <span>{sortIcon(teacherSort.key === "teacherName", teacherSort.direction)}</span></button></th>
@@ -1963,10 +1963,6 @@ export default function ScheduleDashboard({
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("weeklyHours")}>Giờ dạy / tuần <span>{sortIcon(teacherSort.key === "weeklyHours", teacherSort.direction)}</span></button></th>
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("totalStudents")}>Tổng học viên <span>{sortIcon(teacherSort.key === "totalStudents", teacherSort.direction)}</span></button></th>
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("avgStudentsPerClass")}>TB học viên / lớp <span>{sortIcon(teacherSort.key === "avgStudentsPerClass", teacherSort.direction)}</span></button></th>
-                      <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("avgStudentsPerHour")}>Handle HV / giờ <span>{sortIcon(teacherSort.key === "avgStudentsPerHour", teacherSort.direction)}</span></button></th>
-                      <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("centerCount")}>Số cơ sở <span>{sortIcon(teacherSort.key === "centerCount", teacherSort.direction)}</span></button></th>
-                      <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("slotCount")}>Số khung giờ <span>{sortIcon(teacherSort.key === "slotCount", teacherSort.direction)}</span></button></th>
-                      <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("conflictCount")}>Xung đột lịch <span>{sortIcon(teacherSort.key === "conflictCount", teacherSort.direction)}</span></button></th>
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("dispatchScope")}>Phạm vi điều phối <span>{sortIcon(teacherSort.key === "dispatchScope", teacherSort.direction)}</span></button></th>
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("workloadLevel")}>Mức tải <span>{sortIcon(teacherSort.key === "workloadLevel", teacherSort.direction)}</span></button></th>
                       <th><button className="sort-header-btn" onClick={() => toggleTeacherSort("classSizeLevel")}>Quy mô lớp <span>{sortIcon(teacherSort.key === "classSizeLevel", teacherSort.direction)}</span></button></th>
@@ -1981,10 +1977,6 @@ export default function ScheduleDashboard({
                         <td>{teacher.weeklyHours}</td>
                         <td>{teacher.totalStudents}</td>
                         <td>{teacher.avgStudentsPerClass}</td>
-                        <td>{teacher.avgStudentsPerHour}</td>
-                        <td>{teacher.centerCount}</td>
-                        <td>{teacher.slotCount}</td>
-                        <td className={teacher.conflictCount > 0 ? "conflict-cell" : ""}>{teacher.conflictCount}</td>
                         <td>{teacher.dispatchScope}</td>
                         <td>{teacher.workloadLevel}</td>
                         <td>{teacher.classSizeLevel}</td>
